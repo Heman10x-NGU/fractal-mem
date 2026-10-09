@@ -37,6 +37,7 @@ dev = [
 [project.scripts]
 fractald = "fractalmem.daemon.server:main"
 fractalmem-hook = "fractalmem.client:main"
+fractalmem-mcp = "fractalmem.mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["fractalmem"]
