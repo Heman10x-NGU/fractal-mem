@@ -80,3 +80,13 @@ Root took MCP ownership after AGY's final network interruption, added valid
 credential-query echo redaction, and bounded the final SDK serialization
 (including duplicated text/structured output). This completes the remaining
 review findings without depending on a new AGY provider turn.
+
+## CI portability review
+
+The real Ubuntu matrix exposed reliance on absolute monotonic uptime when
+admitting the first prefix-sharing leader. Root now creates a flight whenever
+none exists; the expiration interval applies only to an existing flight. A real
+loopback HTTP regression also covers a recent clock origin. All 138 local tests,
+strict typing, lint, lock validation, build, and a rebuilt installed-wheel
+integration check pass after this repair. The new remote run is authoritative
+for the complete platform matrix.

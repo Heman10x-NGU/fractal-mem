@@ -6,7 +6,7 @@
 
 ## Acceptance status
 
-Phases 1-6 implemented and independently reviewed. The final local gate passes 137 tests, strict mypy on 25 sources, Ruff, frozen-lock validation, and package builds. Installed-wheel verification passes real UDS, disk SQLite, redaction, and MCP stdio checks. Final committed-code benchmarks and the remote CI matrix are pending. Provider quality/cache benchmarks remain unmeasured.
+Phases 1-6 implemented and independently reviewed. The final local gate passes 138 tests, strict mypy on 25 sources, Ruff, frozen-lock validation, and package builds. Installed-wheel verification passes real UDS, disk SQLite, redaction, and MCP stdio checks. Final committed-code benchmarks and the remote CI matrix are pending. Provider quality/cache benchmarks remain unmeasured.
 
 ## Phase 1 review and repairs
 
@@ -55,3 +55,7 @@ Ten real daemon/disk tests now pass, including those regressions. AGY completed
 the core and MCP implementation/repair cycles; its final network interruption
 left the query-echo fix to root. MCP has 16 actual stdio tests passing after root
 added that fix and final SDK output-size enforcement. Root now owns all files.
+
+## Remote CI startup repair
+
+The first CI run passed both macOS jobs and exposed a cold-prefix coordination defect on both Ubuntu jobs. A newly booted host can have a monotonic timestamp below 240 seconds, so the initial zero timestamp skipped leader admission. The first call now explicitly establishes a flight when none exists. The real HTTP test covers both the usual and recent-clock-origin cases; no HTTP mock was introduced. The complete suite now contains 138 tests.

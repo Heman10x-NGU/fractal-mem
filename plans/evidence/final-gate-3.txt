@@ -1,4 +1,5 @@
 $ .venv/bin/ruff check fractalmem benchmarks tests
+
 All checks passed!
 
 exit_code=0

@@ -329,7 +329,7 @@ class HTTPTextProvider:
         leader = False
         if self._prefix_flight is not None and not self._prefix_flight.is_set():
             await self._prefix_flight.wait()
-        if time.monotonic() - self._prefix_ready_at > 240:
+        if self._prefix_flight is None or time.monotonic() - self._prefix_ready_at > 240:
             self._prefix_flight = asyncio.Event()
             leader = True
         flight = self._prefix_flight if leader else None

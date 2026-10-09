@@ -198,7 +198,8 @@ def test_two_stages_over_real_http_and_enforcement_retry_budget() -> None:
         thread.join(timeout=2)
 
 
-def test_prefix_flight_first_byte_release_and_client_reuse() -> None:
+@pytest.mark.parametrize("recent_clock_origin", [False, True])
+def test_prefix_flight_first_byte_release_and_client_reuse(recent_clock_origin: bool) -> None:
     """Actual HTTP followers wait for the cold-prefix response's first byte."""
     from http.server import ThreadingHTTPServer
 
@@ -210,13 +211,14 @@ def test_prefix_flight_first_byte_release_and_client_reuse() -> None:
         def do_POST(self) -> None:
             self.rfile.read(int(self.headers["Content-Length"]))
             arrived.append(time.monotonic())
-            if len(arrived) == 1:
+            first_request = len(arrived) == 1
+            if first_request:
                 time.sleep(0.08)
             body = json.dumps({"choices": [{"message": {"content": "summary"}}]}).encode()
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            if len(arrived) == 1:
+            if first_request:
                 first_byte_at.append(time.monotonic())
             self.wfile.write(body)
 
@@ -231,6 +233,10 @@ def test_prefix_flight_first_byte_release_and_client_reuse() -> None:
         provider = HTTPTextProvider(
             ProviderConfig("openai", f"http://127.0.0.1:{server.server_port}/v1", "fixture")
         )
+        if recent_clock_origin:
+            # No prefix flight exists yet. A recent timestamp reproduces the
+            # startup decision on machines with less than 240 seconds uptime.
+            provider._prefix_ready_at = time.monotonic()
         try:
             await asyncio.gather(*(provider.complete("view", f"task{i}") for i in range(4)))
             assert len(arrived) == 4

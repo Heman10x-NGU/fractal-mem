@@ -1,8 +1,7 @@
 {
   "version": "2.1.0",
   "installed_package": "/tmp/fractalmem-wheel-check/lib/python3.12/site-packages/fractalmem/__init__.py",
-  "wheel_sha256": "8b9b89cd5e617b180bb63a4159e68f3de0d4b23fc42333a79f86311cc19c2dbf",
-  "gitleaks_text_rules": 221,
+  "wheel_sha256": "73de10fc3b5f0881fde7bb574d428342168cdce22997d39e3e51a56dc0e18221",
   "sqlite_messages": 1,
   "mcp_tools": [
     "inspect_node",
@@ -11,5 +10,5 @@
   ],
   "daemon_shutdown_exit": 0,
   "result": "passed",
-  "scope": "installed wheel outside source tree; real UDS, disk SQLite, redaction and MCP stdio"
+  "scope": "final rebuilt installed wheel outside source tree; real UDS, disk SQLite, redaction and MCP stdio"
 }
