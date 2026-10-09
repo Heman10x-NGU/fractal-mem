@@ -6,7 +6,7 @@
 
 ## Acceptance status
 
-Phases 1-6 implemented and independently reviewed. The final local gate passes 138 tests, strict mypy on 25 sources, Ruff, frozen-lock validation, and package builds. Installed-wheel verification passes real UDS, disk SQLite, redaction, and MCP stdio checks. Final committed-code benchmarks and the remote CI matrix are pending. Provider quality/cache benchmarks remain unmeasured.
+Phases 1-6 implemented and independently reviewed. The final local gate passes 138 tests, strict mypy on 25 sources, Ruff, frozen-lock validation, and package builds. Installed-wheel verification passes real UDS, disk SQLite, redaction, and MCP stdio checks. Final committed-code benchmarks and the remote CI matrix passed; detailed results and raw artifacts are archived in benchmarks/results/2026-10-09/. Provider quality/cache benchmarks remain unmeasured.
 
 ## Phase 1 review and repairs
 
@@ -59,3 +59,37 @@ added that fix and final SDK output-size enforcement. Root now owns all files.
 ## Remote CI startup repair
 
 The first CI run passed both macOS jobs and exposed a cold-prefix coordination defect on both Ubuntu jobs. A newly booted host can have a monotonic timestamp below 240 seconds, so the initial zero timestamp skipped leader admission. The first call now explicitly establishes a flight when none exists. The real HTTP test covers both the usual and recent-clock-origin cases; no HTTP mock was introduced. The complete suite now contains 138 tests.
+
+## Final acceptance
+
+Clean implementation revision 09b04b8f84b7cbd95ad4d4d3014ec045ba7515ec was
+evaluated sequentially with all four commands in the result manifest. All
+final reports record git_dirty=false. Core: 30000 turns, 158 batches, zero
+violations, 99.4733% byte-prefix-preserving turns. Disk: 10000 messages,
+1000/1000 correct exact symbol queries, p99 0.0296 ms, exact restart. LoCoMo:
+1986 questions, 1536 scorable, recall@10 0.592184, precision 0.074881.
+LongMemEval cleaned oracle: 500 questions, 470 scorable, session recall@10
+0.978262. These are retrieval results, not generated-answer accuracy.
+
+Four-producer UDS: 4000 attempts, 3506 volatile acknowledgements, 494 timeouts,
+3995 persisted. Every acknowledged event reached disk; 489 timed-out events
+also persisted, five did not. Queue/invalid/conflict/pending/failed counters
+were zero after flush. Exact restart, graceful shutdown, 23.08 s compacting
+flush. Acknowledged p99 11.28 ms; all-attempt p99 17.04 ms. The configured
+15 ms deadline is not a hard real-time guarantee. Full earlier failure and
+optimization evidence is preserved separately from final clean-commit runs.
+
+All 138 tests pass locally; strict mypy on 25 sources, Ruff, frozen lock and
+build pass. Rebuilt installed-wheel UDS/disk/redaction/MCP verification passes.
+GitHub run 37868815175 passes all four Ubuntu/macOS and Python 3.12/3.13 jobs;
+its physical step results are in plans/evidence/ci-code-freeze.json.
+
+AGY completed phased implementation/self-review/repair under the Herdr
+monitor. Root repaired remaining findings and verified independent reviews.
+The task-owned read-only monitor was stopped after AGY returned idle; no other
+pane or agent was stopped. Each meaningful commit was followed by one push.
+
+Phases 1-6 are accepted. Cloud cache percentages, billed-token/TTFT metrics,
+semantic LLM summary quality and official answer judging remain unmeasured;
+they require explicitly configured model calls. Local operation requires no
+external service. The README records integration and operational limits.

@@ -1,0 +1,142 @@
+{
+  "utc": "2026-10-09T01:19:38.300957+00:00",
+  "code_revision": "09b04b8f84b7cbd95ad4d4d3014ec045ba7515ec",
+  "final_runs_clean": true,
+  "compression": "gzip level 9, mtime=0; decompression restores exact generated JSON/CSV/stdout bytes",
+  "artifacts": [
+    {
+      "artifact": "local-final.json.gz",
+      "classification": "final_clean_commit",
+      "source_bytes": 9380882,
+      "source_sha256": "f5f05f62924405e703bbb295ccf3e1969d6828ac165743bb0bc073c0b521dcca",
+      "gzip_bytes": 1108365,
+      "gzip_sha256": "776ed8e0aac15049e295c1e20b9009d10137e0dbdbfd932d42e7b054828c55bf"
+    },
+    {
+      "artifact": "local-final.csv.gz",
+      "classification": "final_clean_commit",
+      "source_bytes": 2601560,
+      "source_sha256": "e70326e5ed4018fc35027fb394f1b5041edb797ee2562ef089207a53bf3ad174",
+      "gzip_bytes": 921095,
+      "gzip_sha256": "6b121679d97d1480b3973a63848cd54588024cdc6c677ed7da9938f995c25db2"
+    },
+    {
+      "artifact": "locomo-final.json.gz",
+      "classification": "final_clean_commit",
+      "source_bytes": 1686209,
+      "source_sha256": "decd0416d8b8591b6875d49bc684f89d1c51ee45e2d5f8392989b1252aa192af",
+      "gzip_bytes": 134310,
+      "gzip_sha256": "f84364a1883699054bfed2cda95657848b4e4370555cf969b3d15179e8de91e7"
+    },
+    {
+      "artifact": "locomo-final.csv.gz",
+      "classification": "final_clean_commit",
+      "source_bytes": 516006,
+      "source_sha256": "3288f6f3b8e81c1d6e03b0ac1c3be07fc7a8c7d1a8628f61543c5fee7b40a35f",
+      "gzip_bytes": 107902,
+      "gzip_sha256": "4197ac6c02d5f815fa0df85ab07d68c206e622567d389fdcaeb267133fbe49ae"
+    },
+    {
+      "artifact": "longmemeval-final.json.gz",
+      "classification": "final_clean_commit",
+      "source_bytes": 492907,
+      "source_sha256": "0fc45f8d6b16fa8d7e2306abebb14d468bc25c113d330388eef9b7d2347766d0",
+      "gzip_bytes": 35505,
+      "gzip_sha256": "3919c12155bbfdfff99e9d9d13d765680366bc53bfbde431cd325a4b7c7236c0"
+    },
+    {
+      "artifact": "longmemeval-final.csv.gz",
+      "classification": "final_clean_commit",
+      "source_bytes": 203411,
+      "source_sha256": "282a53225b75428f463602e7ef96e07f486b92da25854aa93a05d14e72bc9885",
+      "gzip_bytes": 30728,
+      "gzip_sha256": "f93484bdff1b4865ffe67f3796ee597787940f6b7835bcc778f49bba0551b0aa"
+    },
+    {
+      "artifact": "uds-final.json.gz",
+      "classification": "final_clean_commit",
+      "source_bytes": 1594602,
+      "source_sha256": "3ef3727221fd84cd668795b4dd79c36f70230309fd008d0d6bd963577678f526",
+      "gzip_bytes": 44785,
+      "gzip_sha256": "5dcdb66b23358fb3be4e9cfd3b7d78a81eb7e151f419261dea508a89f28f2dba"
+    },
+    {
+      "artifact": "uds-final.csv.gz",
+      "classification": "final_clean_commit",
+      "source_bytes": 287245,
+      "source_sha256": "019bffa57cb32e0be006a1fe30915c62245848aede198a8d8e2b2bac065c94c2",
+      "gzip_bytes": 37454,
+      "gzip_sha256": "89893fb063bc8595564333cf9a3275171cc164cfb05603ce83d62998e53710ea"
+    },
+    {
+      "artifact": "uds-4k-instrumented.json.gz",
+      "classification": "historical_development_run",
+      "source_bytes": 1594544,
+      "source_sha256": "c4174eb6ab72f5483902d59e1da7712060fd7737d1fdbbfd205f6580441fd8fb",
+      "gzip_bytes": 44890,
+      "gzip_sha256": "228188e07a0dd2645c3dff4741821b1c9d30ee7c1a7cec79fbee99028d939c50"
+    },
+    {
+      "artifact": "uds-4k-instrumented.csv.gz",
+      "classification": "historical_development_run",
+      "source_bytes": 271454,
+      "source_sha256": "1eff7b0cdb598529ba1ede204e5fa88b63b1bab39841909bd17c9a3ba989103f",
+      "gzip_bytes": 37700,
+      "gzip_sha256": "7872dd3c2ef3eac3ec2ecdee25243685f4f9e372438609ffdbe6950b7672185c"
+    },
+    {
+      "artifact": "uds-4k-optimized.json.gz",
+      "classification": "historical_development_run",
+      "source_bytes": 1594549,
+      "source_sha256": "e3b4f754e240adf48e371ccab3a8dcb65a47cd4978828931a15390cdcdeb3ed3",
+      "gzip_bytes": 44687,
+      "gzip_sha256": "280dc74841760a4e9784ed2a4f150bf73ed2d6707606c528d85c01c09508d7f7"
+    },
+    {
+      "artifact": "uds-4k-optimized.csv.gz",
+      "classification": "historical_development_run",
+      "source_bytes": 287188,
+      "source_sha256": "9dea254f35ac2158c6016627d5ecfa468d7580d040d0bf0c0e3a6b9b9a82a477",
+      "gzip_bytes": 37396,
+      "gzip_sha256": "08c49f62969c47021024dd0f851cc9c801b1cdb86e2ea7b5dcd2400f39b7b889"
+    },
+    {
+      "artifact": "final-command-1.txt.gz",
+      "classification": "final_command_stdout",
+      "source_bytes": 2230,
+      "source_sha256": "75b039dc785c9acd8bff7cb9553e36c6603fcf0f79e66f53270483e42b802ffc",
+      "gzip_bytes": 1141,
+      "gzip_sha256": "ef3739992c95bd2545a752e3958cc6f4ff45b0d47c18d874236a4dde15d854cc"
+    },
+    {
+      "artifact": "final-command-2.txt.gz",
+      "classification": "final_command_stdout",
+      "source_bytes": 2214,
+      "source_sha256": "6267ec871802e82b5fc3c3b3730483e3952b145e1f67b6063b824ed5c468f902",
+      "gzip_bytes": 1095,
+      "gzip_sha256": "0a28009d0cb0b73e640fd0a77b86918e984101b722b7368fe33fd9773e14caa6"
+    },
+    {
+      "artifact": "final-command-3.txt.gz",
+      "classification": "final_command_stdout",
+      "source_bytes": 2393,
+      "source_sha256": "565c707275215ccd929353b94aa0f7b4bea8ecf262ef0b511de9428bc74f4b19",
+      "gzip_bytes": 1136,
+      "gzip_sha256": "045ed4c9b6832e02837a62fb7605c0106eb6fa33b4a59481ca33e53e7d8f7153"
+    },
+    {
+      "artifact": "final-command-4.txt.gz",
+      "classification": "final_command_stdout",
+      "source_bytes": 2353,
+      "source_sha256": "b72d87bb733e7918df974ac5da3fa50b20604019b3c7c95507bc717e16a03107",
+      "gzip_bytes": 929,
+      "gzip_sha256": "8d0062e5765a9ae2c3cbb1b80fb295cf467aca02067ce959310010af4706824d"
+    }
+  ],
+  "final_commands": [
+    ".venv/bin/python -m benchmarks.eval_harness local --tokenizer cl100k_base --output results/local/local-final.json",
+    ".venv/bin/python -m benchmarks.eval_harness datasets --dataset locomo --path benchmarks/datasets/downloads/locomo10.json --output results/local/locomo-final.json",
+    ".venv/bin/python -m benchmarks.eval_harness datasets --dataset longmemeval --path benchmarks/datasets/downloads/longmemeval_oracle.json --output results/local/longmemeval-final.json",
+    ".venv/bin/python -m benchmarks.uds_benchmark --output results/local/uds-final.json"
+  ]
+}

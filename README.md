@@ -104,9 +104,9 @@ Tool contracts:
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `timeline_overview` | `limit`1..128 | Scoped timeline, summaries, byte budget, batch status |
-| `inspect_node` | `node_id`, `depth`0..8 | Node metadata, bounded children, redacted leaf evidence and taint |
-| `search_symbols_and_text` | `query`<=4096UTF-8bytes, `limit`1..100 | Code/text matches, scores, snippets and HMR node/parent handles |
+| `timeline_overview` | `limit` 1..128 | Scoped timeline, summaries, byte budget, batch status |
+| `inspect_node` | `node_id`, `depth` 0..8 | Node metadata, bounded children, redacted leaf evidence and taint |
+| `search_symbols_and_text` | `query` <=4096 UTF-8 bytes, `limit` 1..100 | Code/text matches, scores, snippets and HMR node/parent handles |
 
 Node identifiers can be canonical (`L0_P0_M0_0`), chronological (`0+1`), or
 project-scoped (`my-project:0+1`). Foreign scopes fail. Tool output carries
@@ -189,7 +189,7 @@ uv run fractald --provider anthropic \
 
 Two stages extract passive facts and enforce the 512-byte summary budget with
 at most five enforcement attempts. Concurrency is bounded at eight jobs.
-Transient HTTP429/5xx/transport failures receive three bounded attempts with
+Transient HTTP 429/5xx/transport failures receive three bounded attempts with
 backoff; other failures remain visible. No cloud fallback is automatic.
 Remediate failures, then retry through the daemon:
 
@@ -251,6 +251,31 @@ LoCoMo data is CC BY-NC 4.0 and is not distributed under this package's MIT
 license. Dataset licenses and provenance remain separate from code licensing.
 Original proposal documents retain historical hypotheses/reference numbers;
 use executed artifacts for conclusions about this implementation.
+
+## Verified results
+
+The final local suite and the four-job GitHub matrix pass **138 tests**, strict
+typing, linting and package builds. The package also passes an installed-wheel
+integration check outside this checkout.
+
+| Evaluation | Measured result |
+|---|---|
+| 30,000 core turns | 99.4733% preserve the byte prefix; zero invariant violations |
+| 10,000-message disk index | 1,000/1,000 exact symbol matches with parent handles; p99 0.030 ms |
+| LoCoMo evidence retrieval | recall@10 59.22%, precision 7.49% across 1,536 scorable questions |
+| LongMemEval cleaned oracle | session recall@10 97.83% across 470 scorable questions |
+| Four producers, 4,000 UDS attempts | all 3,506 acknowledged events durable; 3,995 total persisted; exact restart |
+
+Acknowledged socket calls had p99 11.28 ms; all attempts had p99 17.04 ms.
+There were 494 timed-out receipts, including 489 events that still persisted.
+The client uses a 15 ms configured deadline; a hard wall-clock SLA is not
+established. Provider cache rates and answer-generation quality remain
+unmeasured. Dataset metrics describe retrieval, and oracle context is narrower
+than LongMemEval S/M.
+
+See the [complete measured results and archived JSON/CSV](benchmarks/results/2026-10-09/README.md)
+for environment, denominators, hashes, timing scope, failed-run evidence and
+reproduction commands.
 
 ## Engineering record
 
