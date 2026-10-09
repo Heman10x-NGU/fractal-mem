@@ -1,5 +1,0 @@
-$ uv --cache-dir /tmp/fractalmem-uv-cache lock --check --offline
-
-Resolved 58 packages in 2ms
-
-exit_code=0

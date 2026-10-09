@@ -1,2 +1,0 @@
-Command: .venv/bin/ruff check fractalmem tests
-All checks passed!
