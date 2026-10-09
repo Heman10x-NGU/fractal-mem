@@ -62,3 +62,21 @@ and suppression of SDK validation-value/unknown-name reflection. AGY added
 Pydantic output contracts and real subprocess regressions. Root's full suite
 reached133passing tests before the final query-echo regression was added.
 Final acceptance uses the recorded final gate, not this intermediate count.
+
+## Recovery and shutdown acceptance
+
+Final independent review compared1000 randomized heap preparations with its
+own repeated-scan oracle and reproduced a deferred-publication restart gap:
+ready jobs persisted but the in-memory dirty-view flag was lost. Root added
+startup and orderly-shutdown reconciliation from persisted active snapshots.
+A real disk regression covers270messages, completed jobs, and restart without
+another append. A blocked-provider cancellation test then exposed asyncio's
+`Server.wait_closed()` waiting for existing flush connections before the
+worker could cancel compaction. Shutdown now closes admission, cancels socket
+handlers, cancels model work, drains admitted raw events, reconciles views and
+closes storage. Both regressions pass on actual disk/socket lifecycles.
+
+Root took MCP ownership after AGY's final network interruption, added valid
+credential-query echo redaction, and bounded the final SDK serialization
+(including duplicated text/structured output). This completes the remaining
+review findings without depending on a new AGY provider turn.

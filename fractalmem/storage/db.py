@@ -254,6 +254,18 @@ class Database:
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             self.load_view(project).save_atomic(directory / "view.json")
 
+    def reconcile_views(self) -> None:
+        """Recover batch publication using durable state, not process-local flags."""
+        projects = [
+            str(row[0])
+            for row in self.connection.execute(
+                "SELECT project_id FROM views WHERE json_extract(snapshot,'$.batch_active')=1"
+            )
+        ]
+        for project in projects:
+            if self.resume_view_batch(project):
+                self.export_views([project])
+
     def save_view(self, view: View) -> None:
         with self.transaction():
             count = int(
@@ -346,7 +358,10 @@ class Database:
                 leaf_text = f"{event.kind}: {clean}"
                 if len(leaf_text.encode("utf-8")) <= 512:
                     leaf = HMRNode.create_leaf(
-                        seq, leaf_text, kind=cast(MessageKind, event.kind), project_id=event.project_id
+                        seq,
+                        leaf_text,
+                        kind=cast(MessageKind, event.kind),
+                        project_id=event.project_id,
                     )
                 else:
                     leaf = HMRNode.create_pending(0, seq, event.project_id)

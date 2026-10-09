@@ -234,12 +234,13 @@ class FractalDaemon:
         self.closing = True
         if self._server is not None:
             self._server.close()
-            await self._server.wait_closed()
-        await self.worker.close()
         for task in tuple(self._connections):
             task.cancel()
         if self._connections:
             await asyncio.gather(*self._connections, return_exceptions=True)
+        await self.worker.close()
+        if self._server is not None:
+            await self._server.wait_closed()
         if self._lease is not None:
             self._lease.close()
 

@@ -302,3 +302,78 @@ def test_bad_security_input_is_isolated_and_valid_neighbors_commit() -> None:
             assert not client.status()["worker_failed"]
             assert client.ingest_event(kind="user", content="still healthy").accepted
             assert client.flush()["messages"] == 3
+
+
+def test_restart_recovers_fully_ready_batch_without_in_memory_dirty_flags() -> None:
+    from fractalmem.compaction import Compactor
+    from fractalmem.protocol import Event
+
+    async def prepare(path: Path) -> None:
+        with Database(path) as db:
+            db.append_events(
+                [Event("project", "session", f"event-{i}", "user", "x" * 480) for i in range(270)]
+            )
+            assert db.load_view("project").batch_active
+            while jobs := db.claim_jobs():
+                for job in jobs:
+                    node = db.get_node(job.project_id, job.node_id)
+                    assert node is not None
+                    assert node.level > 0
+                    left = db.resolve_parent(node.level - 1, node.index_in_level * 2, "project")
+                    right = db.resolve_parent(
+                        node.level - 1, node.index_in_level * 2 + 1, "project"
+                    )
+                    assert left is not None and right is not None
+                    ready, _ = await Compactor().build_node(
+                        node, left.summary_text + "\n" + right.summary_text
+                    )
+                    db.complete_node(ready, resume_view=False)
+            assert db.status()["pending_jobs"] == 0
+            assert db.load_view("project").batch_active
+
+    with tempfile.TemporaryDirectory(prefix="fm-", dir="/tmp") as raw:
+        directory = Path(raw)
+        asyncio.run(prepare(directory / "db.sqlite"))
+        with running_daemon(directory) as (_, client):
+            assert client.flush(compact=True)["messages"] == 270
+            with Database(directory / "db.sqlite", read_only=True) as db:
+                assert not db.load_view("project").batch_active
+                assert db.load_view("project").byte_size <= 64000
+
+
+def test_shutdown_cancels_blocked_compaction_and_drains_raw_events() -> None:
+    from fractalmem.compaction import Compactor, ProviderReply
+
+    # A deliberately blocked provider is a cancellation fault fixture; storage
+    # and daemon sockets are real. Actual HTTP contracts are tested separately.
+    class BlockedProvider:
+        def __init__(self) -> None:
+            self.entered = asyncio.Event()
+
+        async def complete(self, view_buffer: str, task: str) -> ProviderReply:
+            self.entered.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    async def scenario(directory: Path) -> None:
+        provider = BlockedProvider()
+        daemon = FractalDaemon(
+            directory / "db.sqlite", directory / "d.sock", compactor=Compactor(provider)
+        )
+        await daemon.start()
+        client = FractalClient("project", socket_path=directory / "d.sock")
+        receipt = await asyncio.to_thread(
+            client.ingest_event, kind="tool", content="large source " * 100
+        )
+        assert receipt.accepted
+        await asyncio.wait_for(provider.entered.wait(), timeout=2)
+        barrier = asyncio.create_task(asyncio.to_thread(client.flush, compact=True))
+        await asyncio.sleep(0.02)
+        await asyncio.wait_for(daemon.close(), timeout=2)
+        with pytest.raises(OSError):
+            await barrier
+        with Database(directory / "db.sqlite", read_only=True) as db:
+            assert db.status()["messages"] == 1
+
+    with tempfile.TemporaryDirectory(prefix="fm-", dir="/tmp") as raw:
+        asyncio.run(scenario(Path(raw)))

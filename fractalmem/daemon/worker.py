@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from fractalmem.compaction import CompactionError, Compactor
-from fractalmem.core.node import HMRNode
+from fractalmem.core.node import ByteBudgetExceededError, HMRNode
 from fractalmem.daemon.ring_buffer import RingBuffer
 from fractalmem.protocol import Event
 from fractalmem.security.redact import RedactionError
@@ -70,6 +70,7 @@ class WriterWorker:
         self._db = Database(self.path, synchronous=self.synchronous)
         try:
             self._db.recover_jobs()
+            self._db.reconcile_views()
             self._db.export_views()
         except BaseException:
             self._db.close()
@@ -162,7 +163,7 @@ class WriterWorker:
             await self.call(finish)
             self._dirty_views.add(ready.project_id)
             self._completions_since_resume += 1
-        except CompactionError as error:
+        except (CompactionError, RedactionError, ByteBudgetExceededError) as error:
             reason = type(error).__name__
             await self.call(lambda db: db.fail_job(job, reason))
         finally:
@@ -290,13 +291,15 @@ class WriterWorker:
     async def close(self) -> None:
         self.stopping = True
         self.wake.set()
-        if self._task is not None:
-            await self._task
         for task in tuple(self._compactions):
             task.cancel()
         if self._compactions:
             await asyncio.gather(*self._compactions, return_exceptions=True)
+        if self._task is not None:
+            await self._task
         if self._db is not None:
+            if self.fatal_reason is None:
+                await self.call(lambda db: db.reconcile_views())
             await self.call(lambda db: db.close())
             self._db = None
         self._executor.shutdown(wait=True, cancel_futures=True)
