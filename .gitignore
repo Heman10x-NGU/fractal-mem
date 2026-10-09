@@ -14,4 +14,5 @@ build/
 *.sock
 benchmarks/datasets/downloads/
 benchmarks/results/local/
+results/local/
 .fractalmem/

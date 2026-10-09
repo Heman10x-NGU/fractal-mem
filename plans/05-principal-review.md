@@ -18,3 +18,47 @@ Run core tests, entire current pytest (real HTTP tests need socket permission), 
 
 * Storage and security currently pass 41 real tests and strict typing. Root found credential-like metadata could be persisted; it now rejects those identifiers before disk use, and tests cover DB plus WAL artifacts.
 * Real HTTP compactor integration found entropy redaction was rewriting the cryptographic framing delimiter. Root is repairing that and retaining a transport regression test. Provider protocol fixtures are explicitly distinct from live LLM quality measurements.
+
+## Runtime and security review, second pass
+
+An independent read-only review reproduced quoted-secret leakage in fenced or
+truncated JSON, entropy bypass for >8192-character tokens, and an oversized
+config-depth event poisoning the writer. Repairs add quoted-key fallback,
+whole-token entropy checks and per-event security rejection isolation.
+Regression tests physically exercise disk and actual socket traffic.
+
+Additional fixes: CPU compaction preprocessing is offloaded from the socket
+loop; configured HTTP clients reuse connections and gate cold-prefix followers
+until first response body bytes. Transient failures have three bounded attempts,
+failed jobs can be explicitly requeued, and compacting flush rejects incomplete
+work. Text snippets now include tail matches. The pinned upstream Gitleaks
+v8.30.0 catalog supplies all221 applicable text rules with integrity verification,
+regex time bounds and license; rules compile before daemon readiness.
+
+The full4k UDS benchmark initially failed: a180s flush deadline expired while
+private batch candidates were repeatedly rebuilt; graceful drain also exceeded
+its cleanup budget. The failed artifact preserves volatile receipts and missing
+commits instead of calling the run successful. Structural repairs replace
+per-merge whole-frontier scans with an exact-priority heap and linked frontier,
+evaluate transactional ingress batches once, cache parent lookups, group view
+resumption and export only changed committed views. Incomplete batches now
+publish no partial rewrite. Ready registry nodes cannot change, and short
+persisted leaves retain message-kind provenance.
+
+Fresh full4k run then passed:3987 durable messages, every3550 accepted receipt
+on disk,22.37s compaction flush, byte-exact restart, zero queue/failed-job/writer
+failures.450 receipts timed out;437 nevertheless persisted and13 did not.
+Acceptedp99 was10.72ms; all-attemptp99 was16.02ms under development load.
+These are observations, not a hard real-time guarantee. Heap regression tests
+compare complete frontiers against an independently scanned priority oracle
+and bound resolver calls linearly.
+
+## MCP review
+
+AGY implemented actual SDK2 stdio integration and self-review. Root findings
+required matching daemon/MCP default paths, strict integer schemas, bounded
+IDs/responses, per-project status, nonce/taint fields, real lifecycle closure,
+and suppression of SDK validation-value/unknown-name reflection. AGY added
+Pydantic output contracts and real subprocess regressions. Root's full suite
+reached133passing tests before the final query-echo regression was added.
+Final acceptance uses the recorded final gate, not this intermediate count.

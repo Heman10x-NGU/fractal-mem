@@ -144,20 +144,39 @@ def test_injection_label_is_explicit_but_passive_data_is_retained() -> None:
     )
 
 
-@pytest.mark.parametrize('source', [
-    'Tool response:\n```json\n{"password": "hunter2"}\n```',
-    '{"password":"hunter2",',
-    "'api_key': 'hunter2'",
-])
+@pytest.mark.parametrize(
+    "source",
+    [
+        'Tool response:\n```json\n{"password": "hunter2"}\n```',
+        '{"password":"hunter2",',
+        "'api_key': 'hunter2'",
+    ],
+)
 def test_quoted_config_keys_inside_untrusted_or_truncated_outputs(source: str) -> None:
-    assert 'hunter2' not in Redactor().redact(source)
+    assert "hunter2" not in Redactor().redact(source)
 
 
 def test_long_high_entropy_token_is_not_exempt_from_scrubbing() -> None:
     import random
     import string
+
     rng = random.Random(7)
-    token = ''.join(rng.choices(string.ascii_letters + string.digits, k=9000))
+    token = "".join(rng.choices(string.ascii_letters + string.digits, k=9000))
     assert shannon_entropy(token) >= 4.5
     assert token not in Redactor().redact(token)
-    assert Redactor().redact('a' * 9000) == 'a' * 9000
+    assert Redactor().redact("a" * 9000) == "a" * 9000
+
+
+def test_pinned_full_gitleaks_text_catalog_and_new_provider_rules() -> None:
+    from fractalmem.security.gitleaks import rules
+
+    assert len(rules()) == 221
+    for secret in [
+        "lin_api_" + "abcd" * 10,
+        "dp.pt." + ("abcdef" * 8)[:43],
+        "SG." + ("abcd" * 17)[:66],
+    ]:
+        assert shannon_entropy(secret) < 4.5
+        clean = Redactor().redact(secret)
+        assert secret not in clean
+        assert clean == Redactor().redact(clean)

@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
+from fractalmem.security.gitleaks import redact_catalog
+
 MAX_INPUT_BYTES = 1_048_576
 MAX_CONFIG_DEPTH = 64
 REDACTED_PATTERN = re.compile(r"\[REDACTED_SECRET_[0-9a-f]{16}\]")
@@ -261,4 +263,8 @@ class Redactor:
             # Markers and conventional hex hashes do not match H>=4.5.
             return _marker(value) if shannon_entropy(value) >= self.entropy_threshold else value
 
-        return ENTROPY_TOKEN.sub(entropy, clean)
+        clean = ENTROPY_TOKEN.sub(entropy, clean)
+        try:
+            return redact_catalog(clean, _marker, shannon_entropy)
+        except TimeoutError as error:
+            raise RedactionError("credential scan exceeded processing budget") from error

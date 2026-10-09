@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import heapq
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from fractalmem.core.node import PENDING_SUMMARY_PLACEHOLDER, HMRNode, MessageKind
@@ -203,7 +204,11 @@ class InMemoryNodeStore:
         if not isinstance(node, HMRNode):
             raise TypeError(f"Expected HMRNode, got {type(node).__name__}")
         with self._lock:
-            self._nodes[(node.project_id, node.level, node.index_in_level)] = node
+            key = (node.project_id, node.level, node.index_in_level)
+            existing = self._nodes.get(key)
+            if existing is not None and existing.status == "ready" and existing != node:
+                raise ValueError("ready node content is immutable")
+            self._nodes[key] = node
 
     def get(self, level: int, index_in_level: int, project_id: str) -> HMRNode | None:
         """Retrieve a node by level and index_in_level for a project."""
@@ -332,52 +337,125 @@ class HMRTreeEngine:
         return None
 
     def _run_sawtooth_batch(self) -> bool:
-        """Execute or continue a batch merge down towards target_view_bytes.
+        """Prepare an exact-priority batch in O(n log n), publish at target only.
 
-        Returns True if batch completed (view.byte_size <= target_view_bytes),
-        False if batch remains active (e.g. pending parents).
+        A linked frontier and a lazy priority heap avoid rebuilding and querying
+        the entire frontier at every merge. All priorities use the same T and
+        integer cross multiplication; ties retain the oldest-pair policy.
         """
-        while self.view.byte_size > self.target_view_bytes:
-            pairs = find_sibling_pairs(self.view)
-            if not pairs:
-                break
+        original = self.view
+        nodes = {node.start_seq: node for node in original.nodes}
+        starts = [node.start_seq for node in original.nodes]
+        after: dict[int, int | None] = {
+            key: starts[i + 1] if i + 1 < len(starts) else None for i, key in enumerate(starts)
+        }
+        before: dict[int, int | None] = {
+            key: starts[i - 1] if i else None for i, key in enumerate(starts)
+        }
+        size = original.byte_size
 
-            # Find all pairs with ready parents
-            candidate_pairs: list[tuple[SiblingPair, HMRNode]] = []
-            for pair in pairs:
-                parent = self._resolve_parent(pair)
-                if parent is not None and parent.status == "ready":
-                    candidate_pairs.append((pair, parent))
+        @dataclass(slots=True)
+        class Candidate:
+            pair: SiblingPair
+            parent: HMRNode
 
-            if not candidate_pairs:
-                # Cannot merge any more pairs because parents are pending or unbuilt
-                break
+            def __lt__(self, other: Candidate) -> bool:
+                return self.pair.is_more_due_than(other.pair)
 
-            # Select the pair with highest due score (oldest tie-break)
-            best_pair, best_parent = candidate_pairs[0]
-            for pair, parent in candidate_pairs[1:]:
-                if pair.is_more_due_than(best_pair):
-                    best_pair = pair
-                    best_parent = parent
+        heap: list[Candidate] = []
 
-            # Apply merge to frontier
-            k = best_pair.pair_index
-            new_nodes = self.view.nodes[:k] + (best_parent,) + self.view.nodes[k + 2 :]
-            self.view = View(
-                project_id=self.project_id,
-                total_messages=self.view.total_messages,
-                nodes=new_nodes,
-                batch_active=True,
+        def enqueue(left_start: int | None) -> None:
+            if left_start is None or left_start not in nodes:
+                return
+            right_start = after[left_start]
+            if right_start is None:
+                return
+            left, right = nodes[left_start], nodes[right_start]
+            if (
+                left.level != right.level
+                or left.index_in_level % 2
+                or right.index_in_level != left.index_in_level + 1
+            ):
+                return
+            pair = SiblingPair(0, left, right, original.total_messages)
+            parent = self._resolve_parent(pair)
+            if parent is None:
+                return
+            if (
+                parent.project_id != self.project_id
+                or parent.level != pair.parent_level
+                or parent.index_in_level != pair.parent_index
+            ):
+                raise ValueError("resolver returned a parent for a different span or project")
+            heapq.heappush(heap, Candidate(pair, parent))
+
+        for key in starts:
+            enqueue(key)
+        while size > self.target_view_bytes and heap:
+            candidate = heapq.heappop(heap)
+            pair, parent = candidate.pair, candidate.parent
+            left, right = pair.left_node.start_seq, pair.right_node.start_seq
+            if (
+                nodes.get(left) is not pair.left_node
+                or nodes.get(right) is not pair.right_node
+                or after.get(left) != right
+            ):
+                continue
+            previous, following = before[left], after[right]
+            size += (
+                parent.line_byte_size
+                - pair.left_node.line_byte_size
+                - pair.right_node.line_byte_size
             )
-
-        is_completed = self.view.byte_size <= self.target_view_bytes
+            nodes[left] = parent
+            del nodes[right]
+            after[left] = following
+            del after[right]
+            del before[right]
+            if following is not None:
+                before[following] = left
+            enqueue(previous)
+            enqueue(left)
+        completed = size <= self.target_view_bytes
+        if completed:
+            result: list[HMRNode] = []
+            position = starts[0] if starts else None
+            while position is not None:
+                result.append(nodes[position])
+                position = after[position]
+            frontier = tuple(result)
+        else:
+            frontier = original.nodes
         self.view = View(
-            project_id=self.project_id,
-            total_messages=self.view.total_messages,
-            nodes=self.view.nodes,
-            batch_active=not is_completed,
+            self.project_id, original.total_messages, frontier, batch_active=not completed
         )
-        return is_completed
+        return completed
+
+    def append_leaf_nodes(self, leaves: Sequence[HMRNode]) -> None:
+        """Append a committed ingress batch and evaluate its visible frontier once.
+
+        Intermediate states inside a storage transaction are not published.
+        Each leaf remains an immutable, contiguous event in the append log.
+        """
+        if not leaves:
+            return
+        start = self.view.total_messages
+        for offset, leaf in enumerate(leaves):
+            if (
+                leaf.project_id != self.project_id
+                or leaf.level != 0
+                or leaf.start_seq != start + offset
+                or leaf.status not in ("ready", "pending")
+            ):
+                raise ValueError("batch leaves must be contiguous ready/pending project events")
+        self.view = View(
+            self.project_id,
+            start + len(leaves),
+            self.view.nodes + tuple(leaves),
+            batch_active=self.view.batch_active,
+        )
+        if self.view.batch_active or self.view.byte_size > self.max_view_bytes:
+            self.sawtooth_batch_merge()
 
     def sawtooth_batch_merge(self) -> bool:
         """Public operation to initiate or execute a Sawtooth batch merge.

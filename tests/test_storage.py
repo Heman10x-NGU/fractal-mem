@@ -31,7 +31,7 @@ def test_real_disk_wal_read_only_and_single_writer(tmp_path: Path) -> None:
             with pytest.raises(sqlite3.OperationalError):
                 reader.connection.execute("DELETE FROM projects")
     with Database(path) as restart:
-        assert restart.load_view("p").render_buffer() == "0+1|hello\n"
+        assert restart.load_view("p").render_buffer() == "0+1|user: hello\n"
         assert restart.append_event(event("two")).message.seq == 1
 
 

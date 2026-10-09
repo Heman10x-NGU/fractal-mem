@@ -18,6 +18,7 @@ from fractalmem.core.node import HMRNode, MessageKind, NodeStatus
 from fractalmem.core.tree import HMRTreeEngine
 from fractalmem.core.view import View
 from fractalmem.protocol import Event, validate_identifier
+from fractalmem.security.gitleaks import rules
 from fractalmem.security.redact import Redactor
 from fractalmem.storage.fts import SearchHit, index_message, search
 
@@ -106,6 +107,9 @@ class Database:
         self._lock_fd: int | None = None
         self._savepoint = 0
         self.redactor = Redactor()
+        # Compile the immutable catalog before the daemon advertises readiness;
+        # cold rule compilation must not stall its first socket receipts.
+        rules()
         self.connection: sqlite3.Connection
         if synchronous not in ("NORMAL", "FULL"):
             raise ValueError("synchronous must be NORMAL or FULL")
@@ -238,9 +242,11 @@ class Database:
         """
         if self.connection.in_transaction:
             raise RuntimeError("view exports require a committed transaction")
-        names = projects if projects is not None else [
-            str(row[0]) for row in self.connection.execute("SELECT project_id FROM projects")
-        ]
+        names = (
+            projects
+            if projects is not None
+            else [str(row[0]) for row in self.connection.execute("SELECT project_id FROM projects")]
+        )
         root = self.path.with_name(self.path.name + ".views")
         for project in dict.fromkeys(names):
             validate_identifier(project, "project_id")
@@ -293,6 +299,7 @@ class Database:
         results: list[AppendResult] = []
         with self.transaction():
             engines: dict[str, HMRTreeEngine] = {}
+            leaves: dict[str, list[HMRNode]] = {}
             for event in events:
                 clean = self.redactor.redact(event.payload)
                 existing = self.get_event(event.project_id, event.event_id)
@@ -336,9 +343,10 @@ class Database:
                     (event.project_id,),
                 )
                 index_message(self.connection, row_id, event.project_id, seq, clean, event.language)
-                if len(clean.encode("utf-8")) <= 512:
+                leaf_text = f"{event.kind}: {clean}"
+                if len(leaf_text.encode("utf-8")) <= 512:
                     leaf = HMRNode.create_leaf(
-                        seq, clean, kind=cast(MessageKind, event.kind), project_id=event.project_id
+                        seq, leaf_text, kind=cast(MessageKind, event.kind), project_id=event.project_id
                     )
                 else:
                     leaf = HMRNode.create_pending(0, seq, event.project_id)
@@ -351,17 +359,31 @@ class Database:
                 else:
                     self._schedule_parent(leaf)
                 if event.project_id not in engines:
+                    cache: dict[tuple[int, int, str], HMRNode | None] = {}
+
+                    def resolve_cached(
+                        level: int,
+                        index: int,
+                        project: str,
+                        nodes: dict[tuple[int, int, str], HMRNode | None] = cache,
+                    ) -> HMRNode | None:
+                        key = (level, index, project)
+                        if key not in nodes:
+                            nodes[key] = self.resolve_parent(level, index, project)
+                        return nodes[key]
+
                     engines[event.project_id] = HMRTreeEngine(
                         project_id=event.project_id,
                         view=self.load_view(event.project_id),
-                        parent_resolver=self.resolve_parent,
+                        parent_resolver=resolve_cached,
                     )
-                engines[event.project_id].append_leaf_node(leaf)
+                leaves.setdefault(event.project_id, []).append(leaf)
                 message = self.get_message(event.project_id, seq)
                 if message is None:
                     raise RuntimeError("inserted message not visible in transaction")
                 results.append(AppendResult(message, False))
-            for engine in engines.values():
+            for project, engine in engines.items():
+                engine.append_leaf_nodes(leaves[project])
                 self.save_view(engine.view)
         return results
 
@@ -410,7 +432,8 @@ class Database:
             (project_id, node_id, mode, usage_json, time.time_ns()),
         )
 
-    def complete_node(self, node: HMRNode) -> None:
+    def complete_node(self, node: HMRNode, *, resume_view: bool = True) -> bool:
+        """Complete a summary; return whether the frozen view changed."""
         if node.status != "ready":
             raise ValueError("completion requires a ready node")
         clean = self.redactor.redact(node.summary_text)
@@ -425,7 +448,7 @@ class Database:
             if existing.status == "ready":
                 if existing.summary_text != node.summary_text:
                     raise EventConflictError("ready node content cannot change")
-                return
+                return False
             self.connection.execute(
                 "UPDATE tree_nodes SET summary_text=?,byte_size=?,status='ready',kind=? WHERE project_id=? AND node_id=?",
                 (node.summary_text, node.byte_size, node.kind, node.project_id, node.node_id),
@@ -435,14 +458,33 @@ class Database:
                 (node.project_id, node.node_id),
             )
             self._schedule_parent(node)
-            view = self.load_view(node.project_id)
-            if view.batch_active:
-                engine = HMRTreeEngine(
-                    project_id=node.project_id, view=view, parent_resolver=self.resolve_parent
-                )
+            if resume_view:
+                return self.resume_view_batch(node.project_id)
+        return False
+
+    def resume_view_batch(self, project_id: str) -> bool:
+        with self.transaction():
+            active = self.connection.execute(
+                "SELECT json_extract(snapshot,'$.batch_active') FROM views WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+            if active is not None and active[0]:
+                view = self.load_view(project_id)
+                cache: dict[tuple[int, int, str], HMRNode | None] = {}
+
+                def resolve(level: int, index: int, project: str) -> HMRNode | None:
+                    key = (level, index, project)
+                    if key not in cache:
+                        cache[key] = self.resolve_parent(level, index, project)
+                    return cache[key]
+
+                engine = HMRTreeEngine(project_id=project_id, view=view, parent_resolver=resolve)
                 # Resume an already-triggered batch; no prefix changes during ordinary appends.
                 engine.resume_batch()
-                self.save_view(engine.view)
+                if engine.view != view:
+                    self.save_view(engine.view)
+                    return True
+        return False
 
     def fail_job(self, job: CompactionJob, reason: str) -> None:
         with self.transaction():
@@ -480,15 +522,22 @@ class Database:
         return {
             "journal_mode": str(self.connection.execute("PRAGMA journal_mode").fetchone()[0]),
             "schema_version": int(self.connection.execute("PRAGMA user_version").fetchone()[0]),
-            "messages": int(self.connection.execute("SELECT count(*) FROM messages" + scoped, params).fetchone()[0]),
+            "messages": int(
+                self.connection.execute(
+                    "SELECT count(*) FROM messages" + scoped, params
+                ).fetchone()[0]
+            ),
             "pending_jobs": int(
                 self.connection.execute(
-                    "SELECT count(*) FROM compaction_jobs WHERE status IN ('pending','running')" + jobs_scope, params
+                    "SELECT count(*) FROM compaction_jobs WHERE status IN ('pending','running')"
+                    + jobs_scope,
+                    params,
                 ).fetchone()[0]
             ),
             "failed_jobs": int(
                 self.connection.execute(
-                    "SELECT count(*) FROM compaction_jobs WHERE status='failed'" + jobs_scope, params
+                    "SELECT count(*) FROM compaction_jobs WHERE status='failed'" + jobs_scope,
+                    params,
                 ).fetchone()[0]
             ),
         }
