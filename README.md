@@ -286,8 +286,7 @@ The [architecture contract](plans/01-architecture-and-acceptance.md),
 independent review, fixes and physical gates. Meaningful milestone commits
 are each pushed once; no empty contribution-graph padding.
 
-The chronological rollback approach builds on
-[Victor Taelin's UniiChat recipe](https://gist.github.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449).
+
 Primary benchmark sources:
 [LoCoMo](https://github.com/snap-research/locomo),
 [LongMemEval](https://github.com/xiaowu0162/LongMemEval).
