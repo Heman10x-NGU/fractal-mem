@@ -224,8 +224,8 @@ cover exact rendered-view bytes, excluding provider tools/system/task framing.
 No local metric is substituted for provider-billed tokens or cache reads.
 Reports preserve per-turn/per-question JSON/CSV, hashes, commands, revision,
 configuration and environment. Dataset downloads/results scratch directories
-are ignored by Git. See [benchmark methodology](plans/04-benchmark-methodology.md)
-and [executed evidence](plans/03-execution-ledger.md).
+are ignored by Git. See [benchmark strategy and methodology](LAUNCH_AND_BENCHMARK_STRATEGY.md)
+and [executed benchmark artifacts](benchmarks/results/2026-10-09/README.md).
 
 Dataset retrieval commands, after downloading the official files described in
 [dataset provenance](benchmarks/datasets/README.md):
@@ -279,12 +279,16 @@ reproduction commands.
 
 ## Engineering record
 
-The [architecture contract](plans/01-architecture-and-acceptance.md),
-[AGY implementation prompt](plans/02-agy-fractal-prompt.md),
-[execution ledger](plans/03-execution-ledger.md) and
-[principal review](plans/05-principal-review.md) record phased self-review,
-independent review, fixes and physical gates. Meaningful milestone commits
-are each pushed once; no empty contribution-graph padding.
+The architecture, system design, mathematical proofs, and security models are documented in:
+
+- [Architecture Specification](FRACTALMEM_SPECIFICATION.md): Core HMR-Tree algorithms, single-writer daemon, and prompt cache invariance.
+- [Specification Analysis](SPECIFICATION.md): UniiChat Rev 3 breakdown, terminal message age proofs, and batch merging.
+- [Research Paper & Mathematical Proofs](RESEARCH_PAPER_PROPOSAL.md): Theoretical proposals, hypotheses, and formal proofs for `(T - last)/2^l` merge urgency.
+- [Security & Durability Model](SECURITY.md): Single-writer WAL boundaries, UDS permissions, and credential redaction pipeline.
+- [Benchmark & Launch Strategy](LAUNCH_AND_BENCHMARK_STRATEGY.md): Benchmark methodology, harness design, and competitive positioning.
+- [Verified Evaluation Artifacts](benchmarks/results/2026-10-09/README.md): Measurement logs, run manifests, and verified evaluation artifacts.
+
+Phased implementation follows strict systems engineering discipline: formal invariant verification, independent adversarial review, and reproducible physical quality gates before each release. Transient planning notes and agent scratchpads are maintained locally (`plans/`, ignored by Git), keeping the repository focused on verified engineering assets. Milestone commits are pushed linearly; no empty contribution padding or history rewrites.
 
 
 Primary benchmark sources:
