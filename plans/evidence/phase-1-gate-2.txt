@@ -1,0 +1,2 @@
+Command: .venv/bin/mypy --strict fractalmem
+Success: no issues found in 18 source files

@@ -1,0 +1,63 @@
+"""FractalMem core mathematical models, HMR-Tree engine, and views."""
+
+from fractalmem.core.node import (
+    MAX_SUMMARY_BYTES,
+    MAX_TREE_LEVEL,
+    PENDING_SUMMARY_PLACEHOLDER,
+    RULER_512,
+    ByteBudgetExceededError,
+    HMRNode,
+    MessageKind,
+    NodeStatus,
+    NodeValidationError,
+    format_compression_prompt,
+    format_merge_prompt,
+    make_node_id,
+    sanitize_summary_line,
+    truncate_to_utf8_bytes,
+)
+from fractalmem.core.tree import (
+    DEFAULT_MAX_VIEW_BYTES,
+    DEFAULT_TARGET_VIEW_BYTES,
+    HMRTreeEngine,
+    InMemoryNodeStore,
+    ParentNodeResolver,
+    SiblingPair,
+    calculate_due_direct,
+    find_sibling_pairs,
+)
+from fractalmem.core.view import (
+    VIEW_SNAPSHOT_VERSION,
+    View,
+    ViewPersistenceError,
+    ViewValidationError,
+)
+
+__all__ = [
+    "ByteBudgetExceededError",
+    "DEFAULT_MAX_VIEW_BYTES",
+    "DEFAULT_TARGET_VIEW_BYTES",
+    "HMRNode",
+    "HMRTreeEngine",
+    "InMemoryNodeStore",
+    "MAX_SUMMARY_BYTES",
+    "MAX_TREE_LEVEL",
+    "MessageKind",
+    "NodeStatus",
+    "NodeValidationError",
+    "PENDING_SUMMARY_PLACEHOLDER",
+    "ParentNodeResolver",
+    "RULER_512",
+    "SiblingPair",
+    "VIEW_SNAPSHOT_VERSION",
+    "View",
+    "ViewPersistenceError",
+    "ViewValidationError",
+    "calculate_due_direct",
+    "find_sibling_pairs",
+    "format_compression_prompt",
+    "format_merge_prompt",
+    "make_node_id",
+    "sanitize_summary_line",
+    "truncate_to_utf8_bytes",
+]
