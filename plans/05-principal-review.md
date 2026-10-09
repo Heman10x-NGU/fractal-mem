@@ -32,10 +32,10 @@ loop; configured HTTP clients reuse connections and gate cold-prefix followers
 until first response body bytes. Transient failures have three bounded attempts,
 failed jobs can be explicitly requeued, and compacting flush rejects incomplete
 work. Text snippets now include tail matches. The pinned upstream Gitleaks
-v8.30.0 catalog supplies all221 applicable text rules with integrity verification,
+v8.30.0 catalog supplies all 221 applicable text rules with integrity verification,
 regex time bounds and license; rules compile before daemon readiness.
 
-The full4k UDS benchmark initially failed: a180s flush deadline expired while
+The full 4k UDS benchmark initially failed: a 180s flush deadline expired while
 private batch candidates were repeatedly rebuilt; graceful drain also exceeded
 its cleanup budget. The failed artifact preserves volatile receipts and missing
 commits instead of calling the run successful. Structural repairs replace
@@ -45,10 +45,10 @@ resumption and export only changed committed views. Incomplete batches now
 publish no partial rewrite. Ready registry nodes cannot change, and short
 persisted leaves retain message-kind provenance.
 
-Fresh full4k run then passed:3987 durable messages, every3550 accepted receipt
-on disk,22.37s compaction flush, byte-exact restart, zero queue/failed-job/writer
-failures.450 receipts timed out;437 nevertheless persisted and13 did not.
-Acceptedp99 was10.72ms; all-attemptp99 was16.02ms under development load.
+Fresh full 4k run then passed: 3987 durable messages, every 3550 accepted receipt
+on disk, 22.37s compaction flush, byte-exact restart, zero queue/failed-job/writer
+failures. 450 receipts timed out; 437 nevertheless persisted and 13 did not.
+Accepted p99 was 10.72ms; all-attempt p99 was 16.02ms under development load.
 These are observations, not a hard real-time guarantee. Heap regression tests
 compare complete frontiers against an independently scanned priority oracle
 and bound resolver calls linearly.
@@ -60,16 +60,16 @@ required matching daemon/MCP default paths, strict integer schemas, bounded
 IDs/responses, per-project status, nonce/taint fields, real lifecycle closure,
 and suppression of SDK validation-value/unknown-name reflection. AGY added
 Pydantic output contracts and real subprocess regressions. Root's full suite
-reached133passing tests before the final query-echo regression was added.
+reached 133 passing tests before the final query-echo regression was added.
 Final acceptance uses the recorded final gate, not this intermediate count.
 
 ## Recovery and shutdown acceptance
 
-Final independent review compared1000 randomized heap preparations with its
+Final independent review compared 1000 randomized heap preparations with its
 own repeated-scan oracle and reproduced a deferred-publication restart gap:
 ready jobs persisted but the in-memory dirty-view flag was lost. Root added
 startup and orderly-shutdown reconciliation from persisted active snapshots.
-A real disk regression covers270messages, completed jobs, and restart without
+A real disk regression covers 270 messages, completed jobs, and restart without
 another append. A blocked-provider cancellation test then exposed asyncio's
 `Server.wait_closed()` waiting for existing flush connections before the
 worker could cancel compaction. Shutdown now closes admission, cancels socket

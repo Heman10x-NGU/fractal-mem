@@ -38,12 +38,14 @@ dev = [
 fractald = "fractalmem.daemon.server:main"
 fractalmem-hook = "fractalmem.client:main"
 fractalmem-mcp = "fractalmem.mcp.server:main"
+fractalmem-eval = "benchmarks.eval_harness:main"
+fractalmem-uds-bench = "benchmarks.uds_benchmark:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["fractalmem"]
+packages = ["fractalmem", "benchmarks"]
 
 [tool.hatch.build]
-exclude = ["benchmarks/datasets/downloads/**", "results/**", "plans/evidence/**"]
+exclude = ["benchmarks/datasets/downloads/**", "benchmarks/results/**", "results/**", "plans/evidence/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

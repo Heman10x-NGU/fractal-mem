@@ -6,7 +6,7 @@
 
 ## Acceptance status
 
-Planning: prepared and pushed (434654e). Phase 1: principal review and repair completed; preparing physical gate evidence and milestone commit. Phases 2-6: implementation underway. Provider quality/cache benchmarks remain unmeasured.
+Phases 1-6 implemented and independently reviewed. The final local gate passes 137 tests, strict mypy on 25 sources, Ruff, frozen-lock validation, and package builds. Installed-wheel verification passes real UDS, disk SQLite, redaction, and MCP stdio checks. Final committed-code benchmarks and the remote CI matrix are pending. Provider quality/cache benchmarks remain unmeasured.
 
 ## Phase 1 review and repairs
 
@@ -24,34 +24,34 @@ Cleaned LongMemEval oracle: 500 questions, 15388478 bytes, SHA256 821a2034d219ab
 
 ## Runtime integration progress
 
-Core milestone8184389 and storage/security milestoneb4088f2 were each committed
-and pushed once. Root independently verified133 tests in a complete run after
-real daemon/MCP integration. Strict mypy passed25 production/benchmark sources;
+Core milestone 8184389 and storage/security milestone b4088f2 were each committed
+and pushed once. Root independently verified 133 tests in a complete run after
+real daemon/MCP integration. Strict mypy passed 25 production/benchmark sources;
 Ruff passed. Final packaging/recorded gates are still underway.
 
-The first local physical suite ran30000 core turns with cl100k_base exact view
-tokens:158 batches, zero prefix violations,99.4733% prefix-preserving turns,
-mean95340 bytes.10000-message disk corpus:1000/1000 exact symbol queries correct,
+The first local physical suite ran 30000 core turns with cl100k_base exact view
+tokens: 158 batches, zero prefix violations, 99.4733% prefix-preserving turns,
+mean 95340 bytes. 10000-message disk corpus: 1000/1000 exact symbol queries correct,
 restart exact; provider cache/TTFT unknown. These preliminary artifacts record
 a dirty implementation revision; a final committed-code run supersedes timings.
 
-Full LoCoMo retrieval:1986 questions,1536 scorable, evidence recall@10=0.592184;
-cleaned LongMemEval oracle:500 questions,470scorable, session recall@10=0.978262.
+Full LoCoMo retrieval: 1986 questions, 1536 scorable, evidence recall@10=0.592184;
+cleaned LongMemEval oracle: 500 questions, 470 scorable, session recall@10=0.978262.
 No generated answers/official judge were executed. Inputs and original hashes
 remain recorded separately from package licensing.
 
-A real4k UDS run exposed repeated private preparation and failed its180s flush.
+A real 4k UDS run exposed repeated private preparation and failed its 180s flush.
 Root fixed algorithmic work, preserving the failed evidence. Fresh optimized
-run passed in25.43s:3550accepted volatile receipts,450timeouts,3987committed,
+run passed in 25.43s: 3550 accepted volatile receipts, 450 timeouts, 3987 committed,
 no acknowledged events missing, pending/failed jobs zero, restart exact.
-Separate administrative budgets do not alter the15ms hook transport deadline.
+Separate administrative budgets do not alter the 15ms hook transport deadline.
 
 ## Final operational review
 
-Runtimee1f4361 and recoveryfixff06512 were each pushed once. The final independent
-review checked1000randomized heap cases and identified lost deferred-view state
+Runtime e1f4361 and recovery fix ff06512 were each pushed once. The final independent
+review checked 1000 randomized heap cases and identified lost deferred-view state
 on restart; root repaired durable reconciliation and blocked-provider shutdown.
 Ten real daemon/disk tests now pass, including those regressions. AGY completed
 the core and MCP implementation/repair cycles; its final network interruption
-left the query-echo fix to root. MCP has16actualstdio tests passing after root
+left the query-echo fix to root. MCP has 16 actual stdio tests passing after root
 added that fix and final SDK output-size enforcement. Root now owns all files.
