@@ -1,296 +1,233 @@
-# FractalMem v2.1
+# FractalMem
 
-A local hierarchical memory engine for long coding-agent sessions. FractalMem
-keeps a redacted event log, compresses chronological spans into a stable view,
-and retrieves exact symbols and text through SQLite, Tree-sitter and stdio MCP.
+**Compact the context. Keep the evidence.**
 
-**Repository:** [Heman10x-NGU/fractal-mem](https://github.com/Heman10x-NGU/fractal-mem)
+FractalMem is a local memory engine for long-running coding agents. It stores
+redacted events in SQLite, builds a compact hierarchical view, and retrieves
+code symbols and text that a summary may leave out.
 
-## Install
+**Python 3.12+ · macOS / Linux · SQLite + FTS5 · stdio MCP · MIT**
 
-Requires Python 3.12+ and macOS or Linux (Unix sockets and POSIX file locks).
+[Quickstart](#quickstart) · [Connect MCP](#connect-mcp) · [How it works](#how-it-works) · [Results](#measured-results) · [Security](SECURITY.md)
+
+## What you get
+
+- **Persistent evidence:** redacted source events remain available after compaction.
+- **Stable context between batches:** a hierarchical summary view with byte-exact append behavior.
+- **Code-aware retrieval:** exact-symbol lookup plus lexical search over identifiers and prose.
+- **Multi-process ingestion:** hooks send events to one daemon, which owns database writes.
+- **An offline starting point:** deterministic extraction needs no model credentials.
+
+FractalMem supplies memory infrastructure. You wire your agent's event capture
+and prompt construction. Registering its MCP server adds retrieval tools;
+it does not automatically capture events, inject memory, or replace the built-in
+compaction of Claude Code, Cursor, Codex, or another host.
+
+## Quickstart
+
+Requires Python 3.12+, macOS or Linux, and a Python SQLite build with FTS5.
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then:
 
 ```bash
 git clone https://github.com/Heman10x-NGU/fractal-mem.git
 cd fractal-mem
 uv sync --frozen --all-extras
-```
-
-The repository is private; cloning requires GitHub access. Package dependencies
-include the real MCP SDK, SQLite FTS5, Tree-sitter grammars, HTTPX, regex and
-tiktoken. SQLite ships with Python; its build must include FTS5. The locked
-versions make development and CI reproducible. An editable pip installation
-also works: `python -m pip install -e '.[dev]'`.
-
-## Quickstart
-
-Start the daemon in one terminal:
-
-```bash
 uv run fractald
 ```
 
-Defaults: database `~/.fractalmem/memory.db`, socket
-`~/.fractalmem/fractald.sock`. The socket directory must be owned by you with
-mode 0700; a new default directory is created with that mode. Existing insecure
-directories and live sockets are rejected. Offline extractive compaction is
-the default and needs no model credentials or network service.
+Cloning this private repository requires GitHub access. The daemon defaults to
+`~/.fractalmem/memory.db` and `~/.fractalmem/fractald.sock`. It creates a new socket
+directory with mode `0700`; an existing directory must be owned by you and have
+that mode. Offline compaction is the default.
 
-Send events from another terminal:
+In a second terminal, from the same repository:
 
 ```bash
-printf '%s\n' 'We chose SQLite WAL and function computeMemoryBudget.' \
-  | uv run fractalmem-hook --project my-project --session coding-1 --kind user
-
-printf '%s\n' 'def computeMemoryBudget(size): return size * 2' \
+printf '%s' 'def computeMemoryBudget(size): return size * 2' \
   | uv run fractalmem-hook --project my-project --session coding-1 \
-      --kind tool --language python --event-id stable-event-001
+      --kind tool --language python --event-id quickstart-001
 
-uv run fractalmem-hook --operation status
 uv run fractalmem-hook --operation flush --compact
+uv run fractalmem-hook --operation status
 ```
 
-A hook receipt with `accepted:true,durable:false` means **volatile queue
-admission**. Explicit flush waits for the writer to commit all earlier
-admissions. `--compact` also requires current compaction jobs to finish.
-Identity conflicts and rejected security inputs appear in status/barrier
-counters. A timeout is ambiguous: the daemon may already have admitted the
-event. Retry using the same `--event-id`; IDs are unique per project and
-conflicting content is rejected. Fail-open ingestion reports failures without
-interrupting the calling agent. CLI startup/stdin reading is outside the socket
-deadline; a long-lived client is the lower-overhead integration.
+The ingest receipt reports `accepted`, `durable`, `event_id`, and `reason`.
+`accepted: true` acknowledges an in-memory queue admission, not a database
+commit. The explicit flush waits for earlier admissions to be processed;
+check its `conflicts` and `rejected_invalid` counters as well as `durable`.
+A failed compacting flush exits with an error; run `--operation status` to
+inspect pending/failed jobs. A successful compacting response includes
+`compacted: true`. These counters cover the daemon, not just this project.
 
-```python
-from fractalmem.client import FractalClient
+A timeout can occur after admission. Retry the exact ingest command above,
+keeping the same event ID, project, session, kind, language, and payload bytes.
+IDs are unique per project; use a new ID for a new event. The hook fails open
+so an unavailable daemon does not stop the calling agent.
 
-client = FractalClient("my-project", "coding-1")
-receipt = client.ingest_event(
-    kind="tool", content="def computeMemoryBudget(size): return size * 2",
-    language="python", event_id="stable-event-001",
-)
-print(receipt)
-client.flush(compact=True)  # Separate administrative operation, default 30s.
-```
+## Connect MCP
 
-Use SIGTERM/Ctrl-C for graceful shutdown: admitted raw events drain, unfinished
-model jobs recover on restart. Use `--synchronous FULL` for stronger power-loss
-durability; default WAL/NORMAL offers process-crash consistency. See
-[security and durability boundaries](SECURITY.md).
-
-## Native MCP
-
-Launch one read-only stdio server per project:
-
-```bash
-uv run fractalmem-mcp --project my-project
-```
-
-Example configuration for a host that accepts `mcpServers` JSON (replace the
-executable with the absolute installed path):
+Configure your MCP host to launch the installed executable with the same
+project and database used above. For hosts accepting `mcpServers` JSON:
 
 ```json
 {
   "mcpServers": {
     "fractalmem": {
       "command": "/absolute/path/fractal-mem/.venv/bin/fractalmem-mcp",
-      "args": ["--project", "my-project", "--db", "/absolute/path/memory.db"]
+      "args": ["--project", "my-project"]
     }
   }
 }
 ```
 
-Tool contracts:
+Replace the executable path. Add `"--db", "/absolute/path/memory.db"` to `args`
+if the daemon uses a custom database. The daemon must initialize storage first;
+MCP readers do not create it. Each server is scoped to its configured project.
 
-| Tool | Arguments | Result |
+Ask your host to call `search_symbols_and_text` with
+`{"query":"computeMemoryBudget","limit":5}`. The result includes a snippet and
+a node handle; pass the returned `node_id` to `inspect_node` to explore it.
+These are MCP calls, not shell commands.
+
+| Tool | Purpose | Arguments |
 |---|---|---|
-| `timeline_overview` | `limit` 1..128 | Scoped timeline, summaries, byte budget, batch status |
-| `inspect_node` | `node_id`, `depth` 0..8 | Node metadata, bounded children, redacted leaf evidence and taint |
-| `search_symbols_and_text` | `query` <=4096 UTF-8 bytes, `limit` 1..100 | Code/text matches, scores, snippets and HMR node/parent handles |
+| `search_symbols_and_text` | Find code/text evidence and its tree handle | `query` up to 4096 UTF-8 bytes; `limit` 1–100 |
+| `inspect_node` | Inspect a summary, children, or leaf evidence | `node_id`; `depth` 0–8 |
+| `timeline_overview` | Read the active timeline and storage/batch status | `limit` 1–128 |
 
-Node identifiers can be canonical (`L0_P0_M0_0`), chronological (`0+1`), or
-project-scoped (`my-project:0+1`). Foreign scopes fail. Tool output carries
-untrusted-data framing; memory is evidence, never authorization for an action.
-The daemon must initialize the database first. Missing storage produces a safe
-tool error and is never created by a reader. stdout is reserved for protocol.
+Returned memory is untrusted evidence, not permission to act. Project scoping
+is not an OS-level authorization boundary.
 
-## Architecture and invariants
+## How it works
 
-```mermaid
-flowchart LR
-    Hooks[Agent hooks] -->|15ms transport budget| UDS[Private Unix socket]
-    UDS --> Ring[16384 event admission ring]
-    Ring --> Writer[One writer owner thread]
-    Writer --> DB[(SQLite WAL)]
-    Writer --> Jobs[Durable compaction jobs]
-    Jobs --> Compactor[Offline or configured model compactor]
-    Compactor --> Writer
-    DB --> Tree[HMR tree and frozen view]
-    DB --> Search[FTS5 and Tree-sitter symbols]
-    Tree --> MCP[Read-only stdio MCP]
-    Search --> MCP
-    MCP --> Agent[Agent memory tools]
+```text
+Agent events --> Hook / Python client --> Private Unix socket
+                                                 |
+                                          Admission queue
+                                                 |
+                                           Single writer
+                                                 |
+                                           SQLite (WAL)
+                                          /      |      \
+                                    Event log  Search  Durable jobs
+                                               index       |
+                                                 |     Compactor
+                                                 |         |
+                                                 |   Writer publishes
+                                                 |   tree + stable view
+                                                 |         |
+                                                 +----+----+
+                                                      |
+                                                Read-only MCP
+                                                      |
+                                                 Agent tools
 ```
 
-- Each node covers an aligned power-of-two message span. Merge priority is
-  `(T-last)/2**level`; the independent 20,001-step rollback oracle verifies the
-  terminal-message formula. For left index `i`, exact algebra is
-  `(T+1)/2**level-i-2`. The original spec omitted the constant `-2`.
-- Serialized views append exact bytes between batches. A batch starts only
-  **above 128,000 bytes**, then publishes its replacement at **<=64,000 bytes**.
-  Pending summaries retain the original visible prefix; an unfinished batch
-  can temporarily exceed the maximum until compaction catches up. Ready
-  summaries never replace existing lines between batches.
-- Original redacted events remain available when summaries omit details.
-  SQLite snapshots are authoritative; atomic per-project `view.json` exports
-  under `<database>.views/<project>/` are repaired from SQLite on restart.
-- Exact-symbol lookup uses indexed Tree-sitter definitions for Python,
-  JavaScript, TypeScript and TSX. FTS preserves identifiers and adds camel,
-  snake and path components with weighted BM25. Unsupported syntax uses text
-  retrieval. One tool call returns a match and its covering active-tree handle;
-  query complexity is not constant-time.
-- The portable Python MPSC ring uses a short synchronization section and
-  **nonblocking producer admission**. It makes no formal lock-free claim.
-  Producers never write SQLite; mutable storage and socket leases reject
-  another cooperating writer.
+Events are redacted before persistence and indexing. Tree-sitter indexes
+supported definitions in Python, JavaScript, TypeScript, and TSX; FTS5 handles
+text and code-token components. Search needs no embeddings. A result carries
+a covering tree handle, so an agent can find evidence without first traversing
+the hierarchy. One tool call does not imply constant-time search.
 
-### Shared prompt prefix
+The hierarchical multi-resolution (HMR) tree groups events into power-of-two
+spans. Its published view appends exact bytes between batches.
+Above **128,000 bytes**, a batch starts and publishes a replacement at
+**64,000 bytes or less**. While summaries are pending, the old prefix stays
+visible and the view may exceed the trigger. Source events remain stored.
 
-`fractalmem.compaction.PromptPrefix` supplies canonical constant tool
-definitions/system text and four-line Anthropic view blocks. Supply your
-host's **actual** tools/system prefix and share the same prefix/provider
-instance for main and compactor calls. Provider adapters reuse connections and
-coordinate cold-prefix dispatch until the first response body byte. Tools are
-forbidden in compaction. Real normalized provider usage is persisted in
-`compaction_runs`; absent cache/TTFT observations remain null.
+SQLite is authoritative; per-project `view.json` exports are repaired on restart.
+The 16,384-event admission queue uses a nonblocking lock; it is not lock-free.
 
-MCP registration alone does not insert the memory view into Claude Code,
-Cursor, Codex or another host's existing prompt, or replace its compaction.
-Your host must explicitly inject `Database(...,read_only=True).load_view(...)
-.render_buffer()` through this prompt seam. Cache reuse depends on provider,
-model, TTL and request contents; the proposal's 98.6%/96.2% numbers are reference
-claims, not measured guarantees for this package.
+### Prompt integration
 
-## Compaction modes
+For custom hosts, `fractalmem.compaction.PromptPrefix` provides shared prefix
+formatting. Open `Database` with `read_only=True` and inject
+`load_view(project_id).render_buffer()` into your prompt. Main and compactor calls
+must share your actual tools/system prefix and provider instance for alignment.
 
-Offline extraction preserves the head and tail of text within 512 UTF-8 bytes;
-it is a deterministic compressor, not LLM reasoning. For semantic compaction,
-configure an OpenAI-compatible or Anthropic endpoint explicitly:
+Provider cache reuse also depends on model, request, and TTL; stable bytes do
+not guarantee cache hits. Recorded compactor usage is available in `compaction_runs`. Treat it as
+observations, not a complete billing ledger: missing responses are not evidence
+of zero cost. Missing cache or time-to-first-token observations remain null.
+
+## Optional model compaction
+
+Offline extraction retains text within a 512-byte summary budget; it does not
+reason about meaning. For model-based compaction, choose an endpoint explicitly:
 
 ```bash
+# Local OpenAI-compatible service; replace the model name.
 uv run fractald --provider openai \
-  --base-url http://127.0.0.1:8000/v1 --model local-model --airgap
+  --base-url http://127.0.0.1:8000/v1 --model YOUR_LOCAL_MODEL --airgap
 
-# Remote endpoint example: the named environment variable must already be set.
+# Remote Anthropic service; set ANTHROPIC_API_KEY in your environment first.
 uv run fractald --provider anthropic \
   --base-url https://api.anthropic.com/v1 --model YOUR_MODEL \
   --api-key-env ANTHROPIC_API_KEY
 ```
 
-Two stages extract passive facts and enforce the 512-byte summary budget with
-at most five enforcement attempts. Concurrency is bounded at eight jobs.
-Transient HTTP 429/5xx/transport failures receive three bounded attempts with
-backoff; other failures remain visible. No cloud fallback is automatic.
-Remediate failures, then retry through the daemon:
+Run one daemon for a given database/socket; stop the offline instance before
+switching modes. Remote compaction sends redacted evidence to your configured
+provider. No cloud fallback is automatic. `--airgap` or a `.fractalmem_airgap`
+marker in the daemon's working directory permits only literal loopback IP
+model endpoints; it is an application policy, not a network firewall.
+
+Model compaction extracts facts, then enforces the summary budget. After fixing
+a failed job's cause, retry it and wait for completion:
 
 ```bash
 uv run fractalmem-hook --project my-project --operation retry-failed
 uv run fractalmem-hook --operation flush --compact
 ```
 
-`--airgap` or a `.fractalmem_airgap` marker in the daemon's working directory
-allows only literal loopback IP model endpoints. Redirects and environment
-proxies are disabled. Detection includes AST/YAML configuration parsing,
-known provider signatures, all 221 applicable text rules from the pinned
-Gitleaks catalog, and Shannon entropy >=4.5. Redaction and nonces cannot prove
-universal secret detection or zero prompt-injection success.
+Redaction can miss secrets or remove useful text. Nonce framing and tool-free
+compaction do not eliminate prompt injection. Read [SECURITY.md](SECURITY.md)
+before storing sensitive history or enabling a remote provider.
 
-## Tests and reproducible evaluations
+## Measured results
+
+Archived offline evaluations from **2026-10-09**, revision `09b04b8f84b7`, on a
+shared macOS arm64 machine with Python 3.12.13 and SQLite 3.50.4:
+
+| Workload | Observed result |
+|---|---|
+| 30,000 core turns | 99.4733% preserved the byte prefix; zero prefix violations |
+| 10,000-message disk index | 1,000/1,000 exact-symbol top matches; query p99 0.0296 ms |
+| LoCoMo, 1,536 scorable questions | Evidence recall@10 59.22%; precision 7.49% |
+| LongMemEval cleaned oracle, 470 scorable questions | Session recall@10 97.83% |
+| Four producers, 4,000 socket attempts | 3,506 acknowledged events all durable; 3,995 persisted overall |
+
+These measure local behavior and evidence retrieval, not generated-answer
+quality or provider cache hits. LongMemEval oracle uses narrower context than
+S/M. Of 494 timed-out socket calls, 489 still persisted; all-attempt p99 was
+17.04 ms, so the configured 15 ms client deadline is not a hard wall-clock SLA.
+
+See the [full report and archived artifacts](benchmarks/results/2026-10-09/README.md)
+for denominators, environment, revision, hashes, limitations, and reproduction
+commands. These are historical results, not a validation of every later commit.
+
+## Development and further reading
 
 ```bash
 uv run pytest -q
 uv run mypy --strict fractalmem benchmarks
 uv run ruff check fractalmem benchmarks tests
 uv build
-
-uv run fractalmem-eval local --tokenizer cl100k_base --output results/local/local.json
-uv run fractalmem-uds-bench --output results/local/uds.json
 ```
 
-Evaluations use real disk files, actual daemon processes/Unix sockets and real
-Tree-sitter grammars. The local suite defaults to 30,000 core turns, 10,000 disk
-messages and 1,000 identifier queries. Token counts use a named tokenizer and
-cover exact rendered-view bytes, excluding provider tools/system/task framing.
-No local metric is substituted for provider-billed tokens or cache reads.
-Reports preserve per-turn/per-question JSON/CSV, hashes, commands, revision,
-configuration and environment. Dataset downloads/results scratch directories
-are ignored by Git. See [benchmark strategy and methodology](LAUNCH_AND_BENCHMARK_STRATEGY.md)
-and [executed benchmark artifacts](benchmarks/results/2026-10-09/README.md).
+[CI](https://github.com/Heman10x-NGU/fractal-mem/actions/workflows/ci.yml) covers
+Ubuntu/macOS and Python 3.12/3.13. Check the run for your revision.
 
-Dataset retrieval commands, after downloading the official files described in
-[dataset provenance](benchmarks/datasets/README.md):
+- [Security, data flow, and durability](SECURITY.md)
+- [Executed evaluations and reproduction commands](benchmarks/results/2026-10-09/README.md)
+- [Dataset provenance and licensing](benchmarks/datasets/README.md)
+- Implementation: [`core`](fractalmem/core), [`storage`](fractalmem/storage), [`daemon`](fractalmem/daemon), [`mcp`](fractalmem/mcp), [`compaction.py`](fractalmem/compaction.py)
+- Historical design: [architecture](FRACTALMEM_SPECIFICATION.md), [research proposal](RESEARCH_PAPER_PROPOSAL.md), [benchmark strategy](LAUNCH_AND_BENCHMARK_STRATEGY.md)
 
-```bash
-uv run fractalmem-eval datasets --dataset locomo \
-  --path benchmarks/datasets/downloads/locomo10.json --output results/local/locomo.json
-uv run fractalmem-eval datasets --dataset longmemeval \
-  --path benchmarks/datasets/downloads/longmemeval_oracle.json --output results/local/longmemeval.json
-uv run fractalmem-eval usage --path actual-provider-usage.jsonl --output results/local/cache.json
-uv run fractalmem-eval usage --database --project my-project \
-  --path ~/.fractalmem/memory.db --output results/local/compactor-cache.json
-```
+Design documents retain hypotheses and superseded claims. Use implementation,
+security guidance, and executed evidence for current behavior. Contributions
+should add regression coverage and keep performance claims tied to measurements.
 
-LoCoMo evaluation measures dialogue evidence precision/recall; LongMemEval
-measures answer-bearing session retrieval. The **oracle** set is a narrowed
-context and cannot stand in for LongMemEval S/M or V2. Ground-truth answers and
-labels are never indexed. Generated-answer accuracy, official LLM judging,
-real provider-cache hit rates and TTFT require an explicitly configured model
-and actual response/stream observations. They remain unmeasured in offline runs.
+## License
 
-LoCoMo data is CC BY-NC 4.0 and is not distributed under this package's MIT
-license. Dataset licenses and provenance remain separate from code licensing.
-Original proposal documents retain historical hypotheses/reference numbers;
-use executed artifacts for conclusions about this implementation.
-
-## Verified results
-
-The final local suite and the four-job GitHub matrix pass **138 tests**, strict
-typing, linting and package builds. The package also passes an installed-wheel
-integration check outside this checkout.
-
-| Evaluation | Measured result |
-|---|---|
-| 30,000 core turns | 99.4733% preserve the byte prefix; zero invariant violations |
-| 10,000-message disk index | 1,000/1,000 exact symbol matches with parent handles; p99 0.030 ms |
-| LoCoMo evidence retrieval | recall@10 59.22%, precision 7.49% across 1,536 scorable questions |
-| LongMemEval cleaned oracle | session recall@10 97.83% across 470 scorable questions |
-| Four producers, 4,000 UDS attempts | all 3,506 acknowledged events durable; 3,995 total persisted; exact restart |
-
-Acknowledged socket calls had p99 11.28 ms; all attempts had p99 17.04 ms.
-There were 494 timed-out receipts, including 489 events that still persisted.
-The client uses a 15 ms configured deadline; a hard wall-clock SLA is not
-established. Provider cache rates and answer-generation quality remain
-unmeasured. Dataset metrics describe retrieval, and oracle context is narrower
-than LongMemEval S/M.
-
-See the [complete measured results and archived JSON/CSV](benchmarks/results/2026-10-09/README.md)
-for environment, denominators, hashes, timing scope, failed-run evidence and
-reproduction commands.
-
-## Engineering record
-
-The architecture, system design, mathematical proofs, and security models are documented in:
-
-- [Architecture Specification](FRACTALMEM_SPECIFICATION.md): Core HMR-Tree algorithms, single-writer daemon, and prompt cache invariance.
-- [Specification Analysis](SPECIFICATION.md): UniiChat Rev 3 breakdown, terminal message age proofs, and batch merging.
-- [Research Paper & Mathematical Proofs](RESEARCH_PAPER_PROPOSAL.md): Theoretical proposals, hypotheses, and formal proofs for `(T - last)/2^l` merge urgency.
-- [Security & Durability Model](SECURITY.md): Single-writer WAL boundaries, UDS permissions, and credential redaction pipeline.
-- [Benchmark & Launch Strategy](LAUNCH_AND_BENCHMARK_STRATEGY.md): Benchmark methodology, harness design, and competitive positioning.
-- [Verified Evaluation Artifacts](benchmarks/results/2026-10-09/README.md): Measurement logs, run manifests, and verified evaluation artifacts.
-
-Phased implementation follows strict systems engineering discipline: formal invariant verification, independent adversarial review, and reproducible physical quality gates before each release. Transient planning notes and agent scratchpads are maintained locally (`plans/`, ignored by Git), keeping the repository focused on verified engineering assets. Milestone commits are pushed linearly; no empty contribution padding or history rewrites.
-
-
-Primary benchmark sources:
-[LoCoMo](https://github.com/snap-research/locomo),
-[LongMemEval](https://github.com/xiaowu0162/LongMemEval).
+Code: [MIT](LICENSE). Third-party terms apply separately, including LoCoMo's CC BY-NC 4.0 license.
