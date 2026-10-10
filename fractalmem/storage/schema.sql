@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS tree_nodes (
     CHECK(status != 'ready' OR byte_size <= 512)
 );
 CREATE INDEX IF NOT EXISTS idx_tree_range ON tree_nodes(project_id,start_seq,end_seq);
+CREATE INDEX IF NOT EXISTS idx_tree_leaves ON tree_nodes(project_id,level,start_seq);
 CREATE TRIGGER IF NOT EXISTS nodes_ready_immutable BEFORE UPDATE ON tree_nodes
 WHEN OLD.status = 'ready'
 BEGIN SELECT RAISE(ABORT, 'ready nodes are immutable'); END;
@@ -58,6 +59,19 @@ CREATE TABLE IF NOT EXISTS active_frontier (
     PRIMARY KEY(project_id,start_seq),
     FOREIGN KEY(project_id,node_id) REFERENCES tree_nodes(project_id,node_id)
 );
+CREATE TABLE IF NOT EXISTS legacy_views_archive (
+    project_id TEXT NOT NULL,
+    generation INTEGER NOT NULL,
+    snapshot TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    archived_at_ns INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS compaction_watermarks (
+    project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
+    ready_watermark_seq INTEGER NOT NULL DEFAULT -1 CHECK(ready_watermark_seq >= -1),
+    updated_at_ns INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS compaction_jobs (
     project_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
@@ -65,10 +79,14 @@ CREATE TABLE IF NOT EXISTS compaction_jobs (
     attempts INTEGER NOT NULL DEFAULT 0,
     error TEXT,
     ordinal INTEGER PRIMARY KEY,
+    level INTEGER NOT NULL DEFAULT 0,
+    start_seq INTEGER NOT NULL DEFAULT 0,
+    end_seq INTEGER NOT NULL DEFAULT 0,
     UNIQUE(project_id,node_id),
     FOREIGN KEY(project_id,node_id) REFERENCES tree_nodes(project_id,node_id)
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_ready ON compaction_jobs(status,ordinal);
+CREATE INDEX IF NOT EXISTS idx_tree_nodes_status ON tree_nodes(project_id,level,status,start_seq);
 
 CREATE TABLE IF NOT EXISTS ast_symbols (
     project_id TEXT NOT NULL,

@@ -43,6 +43,7 @@ class SearchHit:
     parent_handle: str
     symbol: str | None = None
     source: str = "text"
+    published: bool = True
 
 
 def code_tokens(text: str) -> str:
@@ -152,8 +153,22 @@ def _hit(
         "SELECT node_id,start_seq,end_seq FROM active_frontier WHERE project_id=? AND start_seq<=? ORDER BY start_seq DESC LIMIT 1",
         (project, seq),
     ).fetchone()
-    if ancestor is None or int(ancestor["end_seq"]) < seq:
-        raise RuntimeError("search index has no covering active node")
+    if ancestor is not None and int(ancestor["end_seq"]) >= seq:
+        node_id = str(ancestor["node_id"])
+        parent_handle = f"{ancestor['start_seq']}+{int(ancestor['end_seq']) - int(ancestor['start_seq']) + 1}"
+        published = True
+    else:
+        # Message is not yet in published active_frontier (e.g. pending/unpublished tail).
+        # Fallback to its real existing level-0 leaf node so callers still have a valid scoped handle.
+        leaf = connection.execute(
+            "SELECT node_id FROM tree_nodes WHERE project_id=? AND level=0 AND start_seq=?",
+            (project, seq),
+        ).fetchone()
+        if leaf is None:
+            raise RuntimeError(f"corruption: message {seq} has neither active ancestor nor existing leaf node")
+        node_id = str(leaf["node_id"])
+        parent_handle = f"{seq}+1"
+        published = False
     payload = str(row["payload"])
     if symbol:
         position = payload.find(symbol)
@@ -169,10 +184,11 @@ def _hit(
         seq=seq,
         snippet=payload[start : start + 1200],
         score=score,
-        node_id=str(ancestor["node_id"]),
-        parent_handle=f"{ancestor['start_seq']}+{int(ancestor['end_seq']) - int(ancestor['start_seq']) + 1}",
+        node_id=node_id,
+        parent_handle=parent_handle,
         symbol=symbol,
         source="symbol" if symbol else "text",
+        published=published,
     )
 
 

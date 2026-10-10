@@ -168,11 +168,13 @@ def calculate_due_direct(t: int, last: int, level: int) -> float:
     return (t - last) / (1 << level)
 
 
-def find_sibling_pairs(view: View) -> list[SiblingPair]:
+def find_sibling_pairs(view: View, age_clock: int | None = None) -> list[SiblingPair]:
     """Find all valid sibling pairs in the current frontier view."""
     nodes = view.nodes
     pairs: list[SiblingPair] = []
-    t = view.total_messages
+    t = age_clock if age_clock is not None else view.total_messages
+    if t < view.total_messages:
+        raise ValueError(f"age_clock ({t}) must be >= view total_messages ({view.total_messages})")
 
     for k in range(len(nodes) - 1):
         left = nodes[k]
@@ -234,6 +236,7 @@ class HMRTreeEngine:
         max_view_bytes: int = DEFAULT_MAX_VIEW_BYTES,
         target_view_bytes: int = DEFAULT_TARGET_VIEW_BYTES,
         parent_resolver: ParentNodeResolver | None = None,
+        age_clock: int | None = None,
     ) -> None:
         if type(max_view_bytes) is not int or max_view_bytes <= 0:
             raise ValueError(f"max_view_bytes must be a positive integer, got {max_view_bytes!r}")
@@ -257,12 +260,33 @@ class HMRTreeEngine:
                     f"View project_id '{view.project_id}' does not match engine project_id '{clean_project}'"
                 )
 
+        if age_clock is not None:
+            if type(age_clock) is not int or age_clock < 0:
+                raise ValueError(f"age_clock must be a non-negative integer, got {age_clock!r}")
+            current_total = view.total_messages if view is not None else 0
+            if age_clock < current_total:
+                raise ValueError(
+                    f"age_clock ({age_clock}) must be >= view total_messages ({current_total})"
+                )
+
         self.project_id = clean_project
         self.max_view_bytes = max_view_bytes
         self.target_view_bytes = target_view_bytes
         self.parent_resolver = parent_resolver
+        self.age_clock = age_clock
 
         self.view: View = view if view is not None else View.empty(project_id=self.project_id)
+
+    def set_age_clock(self, age_clock: int | None) -> None:
+        """Update explicit age clock T for storage-backed merges."""
+        if age_clock is not None:
+            if type(age_clock) is not int or age_clock < 0:
+                raise ValueError(f"age_clock must be a non-negative integer, got {age_clock!r}")
+            if age_clock < self.view.total_messages:
+                raise ValueError(
+                    f"age_clock ({age_clock}) must be >= view total_messages ({self.view.total_messages})"
+                )
+        self.age_clock = age_clock
 
     def append_leaf_node(self, node: HMRNode) -> View:
         """Append an externally built level 0 node and evaluate Sawtooth batch merging."""
@@ -279,6 +303,8 @@ class HMRTreeEngine:
             )
 
         new_total = self.view.total_messages + 1
+        if self.age_clock is not None and new_total > self.age_clock:
+            raise ValueError("published coverage cannot exceed the explicit age clock")
         new_nodes = self.view.nodes + (node,)
         new_view = View(
             project_id=self.project_id,
@@ -363,6 +389,11 @@ class HMRTreeEngine:
                 return self.pair.is_more_due_than(other.pair)
 
         heap: list[Candidate] = []
+        t = self.age_clock if self.age_clock is not None else original.total_messages
+        if t < original.total_messages:
+            raise ValueError(
+                f"age_clock ({t}) must be >= view total_messages ({original.total_messages})"
+            )
 
         def enqueue(left_start: int | None) -> None:
             if left_start is None or left_start not in nodes:
@@ -377,7 +408,7 @@ class HMRTreeEngine:
                 or right.index_in_level != left.index_in_level + 1
             ):
                 return
-            pair = SiblingPair(0, left, right, original.total_messages)
+            pair = SiblingPair(0, left, right, t)
             parent = self._resolve_parent(pair)
             if parent is None:
                 return
@@ -440,6 +471,8 @@ class HMRTreeEngine:
         if not leaves:
             return
         start = self.view.total_messages
+        if self.age_clock is not None and start + len(leaves) > self.age_clock:
+            raise ValueError("published coverage cannot exceed the explicit age clock")
         for offset, leaf in enumerate(leaves):
             if (
                 leaf.project_id != self.project_id
@@ -491,7 +524,7 @@ class HMRTreeEngine:
         Requires an explicit parent_builder; no production shortcuts.
         """
         while len(self.view.nodes) > target_length:
-            pairs = find_sibling_pairs(self.view)
+            pairs = find_sibling_pairs(self.view, age_clock=self.age_clock)
             if not pairs:
                 raise ValueError(
                     f"No sibling pairs available to reduce from {len(self.view.nodes)} "

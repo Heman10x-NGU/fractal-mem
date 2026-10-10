@@ -135,7 +135,7 @@ def test_compaction_job_recovery_immutable_nodes_and_view_prefix(tmp_path: Path)
         assert db.recover_jobs() == 1
         assert db.claim_jobs()[0].attempts == 2
         db.complete_node(HMRNode.create_leaf(0, "summary", project_id="p"))
-        assert db.load_view("p").render_buffer() == before
+        assert db.load_view("p").render_buffer() == before + "0+1|summary\n"
         assert db.get_node("p", jobs[0].node_id).summary_text == "summary"  # type: ignore[union-attr]
         with pytest.raises(EventConflictError):
             db.complete_node(HMRNode.create_leaf(0, "different", project_id="p"))
@@ -175,7 +175,9 @@ def test_schema_version_and_nested_transaction_rollback(tmp_path: Path) -> None:
 
 
 def test_tail_text_needle_snippet(tmp_path: Path) -> None:
-    with Database(tmp_path / 'memory.db') as db:
-        db.append_event(Event('project', 'session', 'tail', 'tool', 'ordinary prose ' * 300 + 'rareTailNeedle'))
-        hit = db.search('project', 'rareTailNeedle')[0]
-        assert 'rareTailNeedle' in hit.snippet
+    with Database(tmp_path / "memory.db") as db:
+        db.append_event(
+            Event("project", "session", "tail", "tool", "ordinary prose " * 300 + "rareTailNeedle")
+        )
+        hit = db.search("project", "rareTailNeedle")[0]
+        assert "rareTailNeedle" in hit.snippet

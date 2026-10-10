@@ -79,6 +79,10 @@ class StorageStatusModel(BaseModel):
     messages: int
     pending_jobs: int
     failed_jobs: int
+    committed_messages: int = 0
+    ready_watermark_seq: int = -1
+    published_coverage: int = 0
+    published_watermark_seq: int = -1
 
 
 class TimelineOverviewResult(BaseModel):
@@ -156,6 +160,7 @@ class SearchHitModel(BaseModel):
     symbol: str | None = None
     source: str
     taint: str
+    published: bool = True
 
 
 class SearchResult(BaseModel):
@@ -339,6 +344,10 @@ def create_mcp_server(project_id: str, db_path: Path | str) -> SanitizedMCPServe
                 messages=int(db_status["messages"]),
                 pending_jobs=int(db_status["pending_jobs"]),
                 failed_jobs=int(db_status["failed_jobs"]),
+                committed_messages=int(db_status.get("committed_messages", 0)),
+                ready_watermark_seq=int(db_status.get("ready_watermark_seq", -1)),
+                published_coverage=int(db_status.get("published_coverage", 0)),
+                published_watermark_seq=int(db_status.get("published_watermark_seq", -1)),
             ),
             nodes=[
                 FrontierNodeModel(
@@ -618,6 +627,7 @@ def create_mcp_server(project_id: str, db_path: Path | str) -> SanitizedMCPServe
                     symbol=h.symbol,
                     source=h.source,
                     taint=framed.taint,  # explicit untrusted external taint
+                    published=h.published,
                 )
             )
 

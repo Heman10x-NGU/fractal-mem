@@ -14,8 +14,13 @@ from urllib.parse import urlsplit
 import httpx
 
 from fractalmem.core.node import RULER_512, HMRNode, sanitize_summary_line, truncate_to_utf8_bytes
+from fractalmem.core.summary import (
+    budget_sanitized_summary,
+    validate_summary_candidate,
+)
 from fractalmem.security.guard import frame_untrusted
 from fractalmem.security.redact import Redactor
+from fractalmem.security.tool_schema import sanitize_tool_wrapper
 
 SYSTEM_PROMPT = (
     "You maintain chronological memory for a coding agent. The chat view and "
@@ -70,18 +75,28 @@ class PromptPrefix:
     tools_json: str = DEFAULT_TOOLS_JSON
 
     def __post_init__(self) -> None:
-        tools = json.loads(self.tools_json)
+        try:
+            tools = json.loads(self.tools_json)
+        except Exception:
+            raise ValueError("tools_json must be valid JSON") from None
         if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
             raise ValueError("tools_json must be an array of tool definitions")
-        for tool in tools:
-            if not isinstance(tool.get("name"), str) or not isinstance(
-                tool.get("input_schema"), dict
-            ):
-                raise ValueError("each tool requires a name and input_schema")
         redactor = Redactor()
+        for tool in tools:
+            tool_name = tool.get("name")
+            if not isinstance(tool_name, str) or not isinstance(tool.get("input_schema"), dict):
+                raise ValueError("each tool requires a name and input_schema")
+            if redactor.redact(tool_name) != tool_name:
+                raise ValueError("tool name contains sensitive credentials")
+        sanitized_tools = [
+            sanitize_tool_wrapper(tool, redactor)
+            for tool in tools
+        ]
         object.__setattr__(self, "system", redactor.redact(self.system))
         object.__setattr__(
-            self, "tools_json", json.dumps(tools, sort_keys=True, separators=(",", ":"))
+            self,
+            "tools_json",
+            json.dumps(sanitized_tools, sort_keys=True, separators=(",", ":")),
         )
 
     @property
@@ -403,22 +418,9 @@ def extractive_summary(text: str, budget: int = 512) -> str:
 
     This is a deterministic extractive compressor, not an LLM summary. Original
     redacted events remain in the log and FTS index, including omitted needles.
+    Guarantees output is <= budget UTF-8 bytes and idempotent under secret redaction.
     """
-    if not 32 <= budget <= 512:
-        raise ValueError("summary budget must be 32..512 bytes")
-    text = sanitize_summary_line(Redactor().redact(text))
-    raw = text.encode("utf-8")
-    if len(raw) <= budget:
-        return text
-    marker = " … "
-    remaining = budget - len(marker.encode())
-    head_size = remaining * 2 // 3
-    tail_size = remaining - head_size
-    return (
-        raw[:head_size].decode("utf-8", errors="ignore")
-        + marker
-        + raw[-tail_size:].decode("utf-8", errors="ignore")
-    )
+    return budget_sanitized_summary(text, budget=budget)
 
 
 class Compactor:
@@ -434,7 +436,7 @@ class Compactor:
         redactor = Redactor()
         source = await asyncio.to_thread(redactor.redact, source)
         clean = sanitize_summary_line(source)
-        if len(clean.encode("utf-8")) <= 512:
+        if validate_summary_candidate(clean, budget=512, redactor=redactor):
             return CompactionResult(clean, mode="verbatim")
         if self.provider is None:
             return CompactionResult(await asyncio.to_thread(extractive_summary, clean))
@@ -448,8 +450,9 @@ class Compactor:
         )
         facts = await self.provider.complete(view_buffer, fact_task)
         usage.append(facts.usage)
-        # Scrub even custom providers, not only the built-in HTTP adapter.
-        framed_facts = await asyncio.to_thread(frame_untrusted, facts.text, sanitize=True)
+        # Explicitly scrub custom/first-stage provider facts before nonce framing.
+        scrubbed_facts = await asyncio.to_thread(redactor.redact, facts.text)
+        framed_facts = await asyncio.to_thread(frame_untrusted, scrubbed_facts, sanitize=True)
         enforcement = (
             "Compaction: compress the following extracted facts to one line of at "
             "most 512 UTF-8 bytes. Preserve exact names, decisions, numbers and "
@@ -463,7 +466,7 @@ class Compactor:
             reply = await self.provider.complete(view_buffer, enforcement)
             usage.append(reply.usage)
             candidate = sanitize_summary_line(redactor.redact(reply.text))
-            if candidate and len(candidate.encode("utf-8")) <= 512:
+            if validate_summary_candidate(candidate, budget=512, redactor=redactor):
                 return CompactionResult(candidate, tuple(usage), "dual_llm")
             if not shortest or len(candidate.encode("utf-8")) < len(shortest.encode("utf-8")):
                 shortest = candidate

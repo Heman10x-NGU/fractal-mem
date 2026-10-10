@@ -15,6 +15,7 @@ from typing import cast
 from urllib.parse import quote
 
 from fractalmem.core.node import HMRNode, MessageKind, NodeStatus
+from fractalmem.core.summary import budget_sanitized_summary
 from fractalmem.core.tree import HMRTreeEngine
 from fractalmem.core.view import View
 from fractalmem.protocol import Event, validate_identifier
@@ -22,7 +23,7 @@ from fractalmem.security.gitleaks import rules
 from fractalmem.security.redact import Redactor
 from fractalmem.storage.fts import SearchHit, index_message, search
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class WriterAlreadyRunningError(RuntimeError):
@@ -58,6 +59,9 @@ class CompactionJob:
     project_id: str
     node_id: str
     attempts: int
+    level: int = 0
+    start_seq: int = 0
+    end_seq: int = 0
 
 
 def _message(row: sqlite3.Row) -> StoredMessage:
@@ -138,18 +142,98 @@ class Database:
             version = int(self.connection.execute("PRAGMA user_version").fetchone()[0])
             if version > SCHEMA_VERSION or (read_only and version != SCHEMA_VERSION):
                 raise RuntimeError("unsupported database schema version")
-            if not read_only and version == 0:
-                schema = Path(__file__).with_name("schema.sql").read_text()
-                self.connection.executescript(
-                    "BEGIN IMMEDIATE;\n"
-                    + schema
-                    + f"\nPRAGMA user_version={SCHEMA_VERSION};\nCOMMIT;"
-                )
+            if not read_only:
+                if version == 0:
+                    schema = Path(__file__).with_name("schema.sql").read_text()
+                    self.connection.executescript(
+                        "BEGIN IMMEDIATE;\n"
+                        + schema
+                        + f"\nPRAGMA user_version={SCHEMA_VERSION};\nCOMMIT;"
+                    )
+                elif version == 1:
+                    self._migrate_v1_to_v2()
         except BaseException:
             if hasattr(self, "connection"):
                 self.connection.close()
             self._release_lock()
             raise
+
+    def _migrate_v1_to_v2(self) -> None:
+        """One-time atomic transactional migration from Schema V1 to V2.
+
+        All DDL changes, job metadata backfills, watermark initialization,
+        view migration, and PRAGMA user_version = 2 are executed in one single
+        atomic transaction. If any failure occurs, the transaction rolls back
+        completely and the database remains cleanly at version 1.
+        """
+        try:
+            self.connection.executescript(
+                """
+                BEGIN IMMEDIATE;
+                CREATE TABLE legacy_views_archive (
+                    project_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    snapshot TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    archived_at_ns INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS compaction_watermarks (
+                    project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
+                    ready_watermark_seq INTEGER NOT NULL DEFAULT -1 CHECK(ready_watermark_seq >= -1),
+                    updated_at_ns INTEGER NOT NULL
+                );
+
+                ALTER TABLE compaction_jobs ADD COLUMN level INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE compaction_jobs ADD COLUMN start_seq INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE compaction_jobs ADD COLUMN end_seq INTEGER NOT NULL DEFAULT 0;
+
+                CREATE INDEX IF NOT EXISTS idx_tree_nodes_status ON tree_nodes(project_id, level, status, start_seq);
+                CREATE INDEX IF NOT EXISTS idx_tree_leaves ON tree_nodes(project_id, level, start_seq);
+
+                UPDATE compaction_jobs
+                SET level = (SELECT level FROM tree_nodes WHERE tree_nodes.project_id = compaction_jobs.project_id AND tree_nodes.node_id = compaction_jobs.node_id),
+                    start_seq = (SELECT start_seq FROM tree_nodes WHERE tree_nodes.project_id = compaction_jobs.project_id AND tree_nodes.node_id = compaction_jobs.node_id),
+                    end_seq = (SELECT end_seq FROM tree_nodes WHERE tree_nodes.project_id = compaction_jobs.project_id AND tree_nodes.node_id = compaction_jobs.node_id);
+                """
+            )
+            projects = [
+                str(r[0])
+                for r in self.connection.execute(
+                    "SELECT project_id FROM projects ORDER BY project_id"
+                ).fetchall()
+            ]
+            for proj in projects:
+                self._advance_ready_watermark(proj)
+                self._migrate_project_view(proj)
+            self.connection.execute("PRAGMA user_version = 2")
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            raise
+
+    def _migrate_project_view(self, project_id: str) -> None:
+        """Preserve compatible bytes, archive/reset legacy placeholder snapshots."""
+        row = self.connection.execute(
+            "SELECT generation,snapshot FROM views WHERE project_id=?", (project_id,)
+        ).fetchone()
+        view = self.load_view(project_id)
+        if any(node.status != "ready" for node in view.nodes):
+            if row is None:
+                raise RuntimeError("legacy view disappeared during migration")
+            self.connection.execute(
+                "INSERT INTO legacy_views_archive VALUES(?,?,?,?,?)",
+                (
+                    project_id,
+                    int(row["generation"]),
+                    str(row["snapshot"]),
+                    "ready-only publication: one-time cache reset of legacy placeholders",
+                    time.time_ns(),
+                ),
+            )
+            self.save_view(View.empty(project_id))
+            self.publish_ready_view(project_id)
+        else:
+            self._validate_saved_view(view)
 
     def _release_lock(self) -> None:
         if self._lock_fd is not None:
@@ -255,26 +339,42 @@ class Database:
             self.load_view(project).save_atomic(directory / "view.json")
 
     def reconcile_views(self) -> None:
-        """Recover batch publication using durable state, not process-local flags."""
+        """Recover unpublished ready tails and batches from durable state."""
         projects = [
             str(row[0])
             for row in self.connection.execute(
-                "SELECT project_id FROM views WHERE json_extract(snapshot,'$.batch_active')=1"
+                "SELECT p.project_id FROM projects p LEFT JOIN views v USING(project_id) "
+                "WHERE v.project_id IS NULL OR json_extract(v.snapshot,'$.batch_active')=1 "
+                "OR json_extract(v.snapshot,'$.total_messages') < p.next_seq"
             )
         ]
         for project in projects:
             if self.resume_view_batch(project):
                 self.export_views([project])
 
+    def _validate_saved_view(self, view: View) -> None:
+        view.validate()
+        row = self.connection.execute(
+            "SELECT next_seq FROM projects WHERE project_id=?", (view.project_id,)
+        ).fetchone()
+        if row is None or view.total_messages > int(row[0]):
+            raise ValueError("view coverage exceeds the committed project log")
+        for start in range(0, len(view.nodes), 256):
+            chunk = view.nodes[start : start + 256]
+            marks = ",".join("?" for _ in chunk)
+            stored = {
+                str(r["node_id"]): _node(r)
+                for r in self.connection.execute(
+                    f"SELECT * FROM tree_nodes WHERE project_id=? AND node_id IN ({marks})",
+                    (view.project_id, *(n.node_id for n in chunk)),
+                )
+            }
+            if any(n.status != "ready" or stored.get(n.node_id) != n for n in chunk):
+                raise ValueError("view must contain exact durable ready nodes from its project")
+
     def save_view(self, view: View) -> None:
         with self.transaction():
-            count = int(
-                self.connection.execute(
-                    "SELECT next_seq FROM projects WHERE project_id=?", (view.project_id,)
-                ).fetchone()[0]
-            )
-            if count != view.total_messages:
-                raise ValueError("view does not cover the committed project log")
+            self._validate_saved_view(view)
             self.connection.execute(
                 "INSERT INTO views(project_id,generation,snapshot) VALUES(?,1,?) ON CONFLICT(project_id) DO UPDATE SET generation=generation+1,snapshot=excluded.snapshot",
                 (
@@ -300,8 +400,9 @@ class Database:
         parent = HMRNode.create_pending(level, index, node.project_id)
         self._insert_node(parent)
         self.connection.execute(
-            "INSERT INTO compaction_jobs(project_id,node_id,status) VALUES(?,?,'pending')",
-            (node.project_id, parent.node_id),
+            "INSERT INTO compaction_jobs(project_id,node_id,status,level,start_seq,end_seq) "
+            "VALUES(?,?,'pending',?,?,?)",
+            (node.project_id, parent.node_id, parent.level, parent.start_seq, parent.end_seq),
         )
 
     def append_event(self, event: Event) -> AppendResult:
@@ -310,8 +411,7 @@ class Database:
     def append_events(self, events: Sequence[Event]) -> list[AppendResult]:
         results: list[AppendResult] = []
         with self.transaction():
-            engines: dict[str, HMRTreeEngine] = {}
-            leaves: dict[str, list[HMRNode]] = {}
+            projects: set[str] = set()
             for event in events:
                 clean = self.redactor.redact(event.payload)
                 existing = self.get_event(event.project_id, event.event_id)
@@ -324,6 +424,7 @@ class Database:
                     ) != (event.session_id, event.kind, clean, event.language):
                         raise EventConflictError("event_id reused for different event content")
                     results.append(AppendResult(existing, True))
+                    projects.add(event.project_id)
                     continue
                 self.connection.execute(
                     "INSERT OR IGNORE INTO projects(project_id) VALUES(?)", (event.project_id,)
@@ -368,38 +469,20 @@ class Database:
                 self._insert_node(leaf)
                 if leaf.status == "pending":
                     self.connection.execute(
-                        "INSERT INTO compaction_jobs(project_id,node_id,status) VALUES(?,?,'pending')",
-                        (event.project_id, leaf.node_id),
+                        "INSERT INTO compaction_jobs(project_id,node_id,status,level,start_seq,end_seq) "
+                        "VALUES(?,?,'pending',0,?,?)",
+                        (event.project_id, leaf.node_id, leaf.start_seq, leaf.end_seq),
                     )
                 else:
                     self._schedule_parent(leaf)
-                if event.project_id not in engines:
-                    cache: dict[tuple[int, int, str], HMRNode | None] = {}
-
-                    def resolve_cached(
-                        level: int,
-                        index: int,
-                        project: str,
-                        nodes: dict[tuple[int, int, str], HMRNode | None] = cache,
-                    ) -> HMRNode | None:
-                        key = (level, index, project)
-                        if key not in nodes:
-                            nodes[key] = self.resolve_parent(level, index, project)
-                        return nodes[key]
-
-                    engines[event.project_id] = HMRTreeEngine(
-                        project_id=event.project_id,
-                        view=self.load_view(event.project_id),
-                        parent_resolver=resolve_cached,
-                    )
-                leaves.setdefault(event.project_id, []).append(leaf)
+                projects.add(event.project_id)
                 message = self.get_message(event.project_id, seq)
                 if message is None:
                     raise RuntimeError("inserted message not visible in transaction")
                 results.append(AppendResult(message, False))
-            for project, engine in engines.items():
-                engine.append_leaf_nodes(leaves[project])
-                self.save_view(engine.view)
+            for project in projects:
+                self._advance_ready_watermark(project)
+                self.publish_ready_view(project)
         return results
 
     def claim_jobs(self, limit: int = 8) -> list[CompactionJob]:
@@ -411,7 +494,14 @@ class Database:
                 (limit,),
             ).fetchall()
             jobs = [
-                CompactionJob(str(row["project_id"]), str(row["node_id"]), int(row["attempts"]) + 1)
+                CompactionJob(
+                    project_id=str(row["project_id"]),
+                    node_id=str(row["node_id"]),
+                    attempts=int(row["attempts"]) + 1,
+                    level=int(row["level"] or 0),
+                    start_seq=int(row["start_seq"] or 0),
+                    end_seq=int(row["end_seq"] or 0),
+                )
                 for row in rows
             ]
             self.connection.executemany(
@@ -448,11 +538,15 @@ class Database:
         )
 
     def complete_node(self, node: HMRNode, *, resume_view: bool = True) -> bool:
-        """Complete a summary; return whether the frozen view changed."""
+        """Complete a summary; return whether the frozen view changed.
+
+        Re-budgets through budget_sanitized_summary to guarantee that post-redaction
+        expansion cannot exceed the immutable 512-byte constraint.
+        """
         if node.status != "ready":
             raise ValueError("completion requires a ready node")
-        clean = self.redactor.redact(node.summary_text)
-        if clean != node.summary_text:
+        clean = budget_sanitized_summary(node.summary_text, budget=512, redactor=self.redactor)
+        if clean != node.summary_text or node.byte_size != len(clean.encode("utf-8")):
             node = HMRNode.create(
                 node.level, node.index_in_level, clean, project_id=node.project_id
             )
@@ -463,7 +557,7 @@ class Database:
             if existing.status == "ready":
                 if existing.summary_text != node.summary_text:
                     raise EventConflictError("ready node content cannot change")
-                return False
+                return self.publish_ready_view(node.project_id) if resume_view else False
             self.connection.execute(
                 "UPDATE tree_nodes SET summary_text=?,byte_size=?,status='ready',kind=? WHERE project_id=? AND node_id=?",
                 (node.summary_text, node.byte_size, node.kind, node.project_id, node.node_id),
@@ -473,33 +567,96 @@ class Database:
                 (node.project_id, node.node_id),
             )
             self._schedule_parent(node)
+            self._advance_ready_watermark(node.project_id)
             if resume_view:
-                return self.resume_view_batch(node.project_id)
+                return self.publish_ready_view(node.project_id)
+        return False
+
+    def _ready_leaf_chunk(self, project_id: str, start: int) -> list[HMRNode]:
+        """An indexed, bounded read even when a large unpublished tail is blocked."""
+        return [
+            _node(row)
+            for row in self.connection.execute(
+                "SELECT * FROM tree_nodes WHERE project_id=? AND level=0 "
+                "AND start_seq>=? ORDER BY start_seq LIMIT 256",
+                (project_id, start),
+            ).fetchall()
+        ]
+
+    def _advance_ready_watermark(self, project_id: str) -> None:
+        row = self.connection.execute(
+            "SELECT ready_watermark_seq FROM compaction_watermarks WHERE project_id=?",
+            (project_id,),
+        ).fetchone()
+        original = int(row[0]) if row else -1
+        watermark = original
+        while True:
+            chunk = self._ready_leaf_chunk(project_id, watermark + 1)
+            consumed = 0
+            for leaf in chunk:
+                if leaf.start_seq != watermark + 1 or leaf.status != "ready":
+                    break
+                watermark = leaf.end_seq
+                consumed += 1
+            if consumed < 256:
+                break
+        if row is None or watermark != original:
+            self.connection.execute(
+                "INSERT INTO compaction_watermarks VALUES(?,?,?) "
+                "ON CONFLICT(project_id) DO UPDATE SET ready_watermark_seq=excluded.ready_watermark_seq, "
+                "updated_at_ns=excluded.updated_at_ns",
+                (project_id, watermark, time.time_ns()),
+            )
+
+    def publish_ready_view(self, project_id: str) -> bool:
+        """Append the contiguous ready tail; publish merges only at the batch target.
+
+        P is the saved view coverage, T is the committed log clock. Neither a
+        completion nor recovery can substitute placeholders or skip a failed leaf.
+        """
+        with self.transaction():
+            row = self.connection.execute(
+                "SELECT next_seq FROM projects WHERE project_id=?", (project_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            committed = int(row[0])
+            view = self.load_view(project_id)
+            cache: dict[tuple[int, int, str], HMRNode | None] = {}
+
+            def resolve(level: int, index: int, project: str) -> HMRNode | None:
+                key = (level, index, project)
+                if key not in cache:
+                    cache[key] = self.resolve_parent(level, index, project)
+                return cache[key]
+
+            engine = HMRTreeEngine(
+                project_id=project_id, view=view, parent_resolver=resolve, age_clock=committed
+            )
+            appended = False
+            while engine.view.total_messages < committed:
+                start = engine.view.total_messages
+                chunk = self._ready_leaf_chunk(project_id, start)
+                ready: list[HMRNode] = []
+                for leaf in chunk:
+                    if leaf.start_seq != start + len(ready) or leaf.status != "ready":
+                        break
+                    ready.append(leaf)
+                if ready:
+                    engine.append_leaf_nodes(ready)
+                    appended = True
+                if len(ready) < 256:
+                    break
+            if not appended and engine.view.batch_active:
+                engine.resume_batch()
+            if engine.view != view:
+                self.save_view(engine.view)
+                return True
         return False
 
     def resume_view_batch(self, project_id: str) -> bool:
-        with self.transaction():
-            active = self.connection.execute(
-                "SELECT json_extract(snapshot,'$.batch_active') FROM views WHERE project_id=?",
-                (project_id,),
-            ).fetchone()
-            if active is not None and active[0]:
-                view = self.load_view(project_id)
-                cache: dict[tuple[int, int, str], HMRNode | None] = {}
-
-                def resolve(level: int, index: int, project: str) -> HMRNode | None:
-                    key = (level, index, project)
-                    if key not in cache:
-                        cache[key] = self.resolve_parent(level, index, project)
-                    return cache[key]
-
-                engine = HMRTreeEngine(project_id=project_id, view=view, parent_resolver=resolve)
-                # Resume an already-triggered batch; no prefix changes during ordinary appends.
-                engine.resume_batch()
-                if engine.view != view:
-                    self.save_view(engine.view)
-                    return True
-        return False
+        """Compatibility entry point for completion batches and recovery."""
+        return self.publish_ready_view(project_id)
 
     def fail_job(self, job: CompactionJob, reason: str) -> None:
         with self.transaction():
@@ -534,6 +691,33 @@ class Database:
         params = (project_id,) if project_id is not None else ()
         scoped = " WHERE project_id=?" if project_id is not None else ""
         jobs_scope = " AND project_id=?" if project_id is not None else ""
+        watermark = -1
+        committed = 0
+        published = 0
+        if project_id is not None:
+            w_row = self.connection.execute(
+                "SELECT ready_watermark_seq FROM compaction_watermarks WHERE project_id=?",
+                (project_id,),
+            ).fetchone()
+            if w_row is not None:
+                watermark = int(w_row[0])
+            c_row = self.connection.execute(
+                "SELECT next_seq FROM projects WHERE project_id=?", (project_id,)
+            ).fetchone()
+            if c_row is not None:
+                committed = int(c_row[0])
+            published = self.load_view(project_id).total_messages
+        else:
+            committed = int(
+                self.connection.execute(
+                    "SELECT coalesce(sum(next_seq),0) FROM projects"
+                ).fetchone()[0]
+            )
+            published = int(
+                self.connection.execute(
+                    "SELECT coalesce(sum(json_extract(snapshot,'$.total_messages')),0) FROM views"
+                ).fetchone()[0]
+            )
         return {
             "journal_mode": str(self.connection.execute("PRAGMA journal_mode").fetchone()[0]),
             "schema_version": int(self.connection.execute("PRAGMA user_version").fetchone()[0]),
@@ -555,4 +739,8 @@ class Database:
                     params,
                 ).fetchone()[0]
             ),
+            "committed_messages": committed,
+            "ready_watermark_seq": watermark,
+            "published_coverage": published,
+            "published_watermark_seq": published - 1 if project_id is not None else -1,
         }

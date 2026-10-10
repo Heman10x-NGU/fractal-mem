@@ -12,6 +12,7 @@ from typing import TypeVar
 
 from fractalmem.compaction import CompactionError, Compactor
 from fractalmem.core.node import ByteBudgetExceededError, HMRNode
+from fractalmem.core.summary import SummaryBudgetError
 from fractalmem.daemon.ring_buffer import RingBuffer
 from fractalmem.protocol import Event
 from fractalmem.security.redact import RedactionError
@@ -163,7 +164,12 @@ class WriterWorker:
             await self.call(finish)
             self._dirty_views.add(ready.project_id)
             self._completions_since_resume += 1
-        except (CompactionError, RedactionError, ByteBudgetExceededError) as error:
+        except (
+            CompactionError,
+            RedactionError,
+            ByteBudgetExceededError,
+            SummaryBudgetError,
+        ) as error:
             reason = type(error).__name__
             await self.call(lambda db: db.fail_job(job, reason))
         finally:
@@ -206,7 +212,7 @@ class WriterWorker:
 
         def resume(db: Database) -> None:
             for project in projects:
-                if db.resume_view_batch(project):
+                if db.publish_ready_view(project):
                     db.export_views([project])
 
         await self.call(resume)
