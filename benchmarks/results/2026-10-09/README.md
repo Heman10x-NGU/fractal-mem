@@ -72,7 +72,8 @@ The earlier `uds-4k-instrumented` run failed its 180 s compaction barrier and
 required forced cleanup. It is preserved as a failed development observation,
 not included among final passes. `uds-4k-optimized` records the subsequent
 successful development run. Their own revision/dirty metadata remain intact.
-Structural repairs and reviews are in the [principal review](../../../plans/05-principal-review.md).
+The historical principal-review working notes are not included in this repository;
+use the checked-in report and manifest as the available evidence.
 
 ## Dataset attribution
 

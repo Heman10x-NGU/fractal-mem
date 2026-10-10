@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import TypeVar
 
-from fractalmem.compaction import CompactionError, Compactor
+from fractalmem.compaction import CompactionError, Compactor, Usage, observe_compaction_usage
 from fractalmem.core.node import ByteBudgetExceededError, HMRNode
 from fractalmem.core.summary import SummaryBudgetError
 from fractalmem.daemon.ring_buffer import RingBuffer
@@ -64,6 +64,7 @@ class WriterWorker:
         self.conflicts = 0
         self.rejected_invalid = 0
         self.barriers: set[asyncio.Future[dict[str, object]]] = set()
+        self._compact_barriers: set[asyncio.Future[dict[str, object]]] = set()
         self._dirty_views: set[str] = set()
         self._completions_since_resume = 0
 
@@ -147,9 +148,19 @@ class WriterWorker:
         return node, source, view
 
     async def _compact(self, job: CompactionJob) -> None:
+        observed: list[Usage] = []
+
+        async def record_usage(usage: Usage) -> None:
+            await self.call(lambda db: db.record_compaction(
+                job.project_id, job.node_id, "provider_response",
+                json.dumps([asdict(usage)]),
+            ))
+            observed.append(usage)
+
         try:
             node, source, view = await self.call(lambda db: self._source(db, job))
-            ready, result = await self.compactor.build_node(node, source, view)
+            with observe_compaction_usage(record_usage):
+                ready, result = await self.compactor.build_node(node, source, view)
 
             def finish(db: Database) -> None:
                 with db.transaction():
@@ -158,7 +169,9 @@ class WriterWorker:
                         ready.project_id,
                         ready.node_id,
                         result.mode,
-                        json.dumps([asdict(usage) for usage in result.usage]),
+                        # Preserve legacy/custom compactor results without counting
+                        # per-response observations a second time.
+                        json.dumps([asdict(usage) for usage in result.usage]) if not observed else "[]",
                     )
 
             await self.call(finish)
@@ -188,20 +201,13 @@ class WriterWorker:
         if slots <= 0 or self.stopping or self.fatal_reason:
             return False
         jobs = await self.call(lambda db: db.claim_jobs(slots))
+        if self.stopping or self.fatal_reason:
+            return False  # Claimed jobs recover to pending on the next startup.
         for job in jobs:
             task = asyncio.create_task(self._compact(job), name="fractalmem-compaction")
             self._compactions.add(task)
             task.add_done_callback(self._finished)
         return bool(jobs)
-
-    async def _drain_compactions(self) -> None:
-        while not self.fatal_reason:
-            scheduled = await self._schedule()
-            await self._resume_views(force=not self._compactions)
-            if not self._compactions and not scheduled:
-                return
-            if self._compactions:
-                await asyncio.wait(self._compactions, return_when=asyncio.FIRST_COMPLETED)
 
     async def _resume_views(self, *, force: bool = False) -> None:
         if not self._dirty_views or (not force and self._completions_since_resume < 16):
@@ -218,11 +224,20 @@ class WriterWorker:
         await self.call(resume)
 
     async def _barrier(self, item: BarrierWork) -> None:
-        if item.compact:
-            await self._drain_compactions()
+        if item.future.done():
+            self.barriers.discard(item.future)
+            return
+        if item.compact and not self.stopping:
+            self._compact_barriers.add(item.future)
+            return
         status = await self.call(lambda db: db.status())
-        if not item.future.done():
-            item.future.set_result(
+        self._resolve_barrier(item.future, status)
+
+    def _resolve_barrier(
+        self, future: asyncio.Future[dict[str, object]], status: dict[str, int | str]
+    ) -> None:
+        if not future.done():
+            future.set_result(
                 {
                     "version": 1,
                     "durable": self.fatal_reason is None,
@@ -234,7 +249,26 @@ class WriterWorker:
                     **status,
                 }
             )
-        self.barriers.discard(item.future)
+        self.barriers.discard(future)
+
+    async def _finish_compact_barriers(self) -> None:
+        self._compact_barriers = {f for f in self._compact_barriers if not f.done()}
+        if not self._compact_barriers:
+            return
+        if self._compactions and not self.stopping:
+            return  # Completions must register dirty views before publication starts.
+        status = await self.call(lambda db: db.status())
+        # Retain global-idle semantics, but never block raw-event persistence.
+        # Failed jobs are settled work: return compacted=False for explicit retry.
+        if status["pending_jobs"] != 0 and not self.stopping:
+            return
+        await self._resume_views(force=True)
+        status = await self.call(lambda db: db.status())
+        if (status["pending_jobs"] != 0 or self._compactions) and not self.stopping:
+            return
+        for future in self._compact_barriers:
+            self._resolve_barrier(future, status)
+        self._compact_barriers.clear()
 
     async def _run(self) -> None:
         try:
@@ -253,6 +287,7 @@ class WriterWorker:
                 await self._persist(pending)
                 await self._schedule()
                 await self._resume_views(force=not self._compactions)
+                await self._finish_compact_barriers()
                 if not items:
                     self.wake.clear()
                     try:
@@ -269,6 +304,7 @@ class WriterWorker:
                             {"version": 1, "durable": False, "reason": "worker_failed"}
                         )
                 self.barriers.clear()
+                self._compact_barriers.clear()
                 for item in self.queue.pop_batch(self.queue.capacity):
                     if isinstance(item, BarrierWork) and not item.future.done():
                         item.future.set_result(
@@ -283,6 +319,9 @@ class WriterWorker:
             **stored,
             "queue_size": stats.size,
             "capacity": stats.capacity,
+            "queued_payload_bytes": stats.queued_bytes,
+            "queue_byte_capacity": stats.byte_capacity,
+            "rejected_bytes": stats.rejected_bytes,
             "admitted": stats.admitted,
             "rejected_full": stats.rejected_full,
             "rejected_contention_lower_bound": stats.rejected_contention,
@@ -303,6 +342,11 @@ class WriterWorker:
             await asyncio.gather(*self._compactions, return_exceptions=True)
         if self._task is not None:
             await self._task
+        for future in self.barriers:
+            if not future.done():
+                future.set_result({"version": 1, "durable": False, "reason": "shutting_down"})
+        self.barriers.clear()
+        self._compact_barriers.clear()
         if self._db is not None:
             if self.fatal_reason is None:
                 await self.call(lambda db: db.reconcile_views())

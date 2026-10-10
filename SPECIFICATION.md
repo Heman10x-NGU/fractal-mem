@@ -1,3 +1,5 @@
+> Historical design document. Some formulas, performance targets, and implementation claims below are superseded or unverified. Read [the current architecture guide](docs/architecture.md), [README.md](README.md), and [SECURITY.md](SECURITY.md) for current behavior.
+
 # UniiChat (formerly OptChat): One Chat That Never Ends
 **Original Gist by Victor Taelin (Revision 3 - Cache-Stable Release)**: https://gist.github.com/VictorTaelin/91837951a5ce5b38f341ec1ba1df6449
 

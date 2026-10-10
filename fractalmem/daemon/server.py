@@ -87,12 +87,17 @@ class FractalDaemon:
         socket_path: Path | str = DEFAULT_SOCKET,
         *,
         capacity: int = 16384,
+        queue_bytes: int = 64 * 1024 * 1024,
         compactor: Compactor | None = None,
         synchronous: str = "NORMAL",
     ) -> None:
         self.db_path = Path(db_path).expanduser()
         self.socket_path = Path(socket_path).expanduser().absolute()
-        self.queue: RingBuffer[WorkItem] = RingBuffer(capacity)
+        self.queue: RingBuffer[WorkItem] = RingBuffer(
+            capacity, max_bytes=queue_bytes,
+            sizeof=lambda item: len(item.event.payload.encode("utf-8"))
+            if isinstance(item, EventWork) else 0,
+        )
         self.worker = WriterWorker(
             self.db_path, self.queue, compactor=compactor, synchronous=synchronous
         )
@@ -185,7 +190,16 @@ class FractalDaemon:
                 return {"version": 1, "durable": False, "reason": "queue_rejected"}
             self.worker.barriers.add(future)
             self.worker.notify()
-            return await asyncio.wait_for(asyncio.shield(future), timeout=float(timeout))
+            try:
+                return await asyncio.wait_for(asyncio.shield(future), timeout=float(timeout))
+            except TimeoutError:
+                return {"version": 1, "durable": False, "reason": "flush_timeout"}
+            finally:
+                # An abandoned request must not retain a worker-side waiter.
+                if not future.done():
+                    future.cancel()
+                self.worker.barriers.discard(future)
+                self.worker.notify()
         raise ValueError("unknown IPC operation")
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -264,6 +278,7 @@ async def _run(args: argparse.Namespace) -> None:
         args.db,
         args.socket,
         capacity=args.capacity,
+        queue_bytes=args.queue_bytes,
         compactor=Compactor(provider),
         synchronous=args.synchronous,
     )
@@ -286,6 +301,8 @@ def main() -> None:
     parser.add_argument("--db", type=Path, default=Path.home() / ".fractalmem" / "memory.db")
     parser.add_argument("--socket", type=Path, default=DEFAULT_SOCKET)
     parser.add_argument("--capacity", type=int, default=16384)
+    parser.add_argument("--queue-bytes", type=int, default=64 * 1024 * 1024,
+                        help="Maximum queued UTF-8 payload bytes (not total process RSS)")
     parser.add_argument("--synchronous", choices=("NORMAL", "FULL"), default="NORMAL")
     parser.add_argument("--provider", choices=("offline", "openai", "anthropic"), default="offline")
     parser.add_argument("--base-url")

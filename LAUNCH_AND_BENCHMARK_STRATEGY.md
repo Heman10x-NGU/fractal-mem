@@ -1,3 +1,5 @@
+> Historical design document. Some formulas, performance targets, and implementation claims below are superseded or unverified. Read [the current architecture guide](docs/architecture.md), [README.md](README.md), and [SECURITY.md](SECURITY.md) for current behavior.
+
 # FractalMem: Launch, Benchmark & Go-To-Market Playbook
 **Objective:** Scale FractalMem into a SOTA open-source project (5k–20k GitHub stars) and a flagship systems engineering interview showcase.
 

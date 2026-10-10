@@ -1,3 +1,5 @@
+> Historical design document. Some formulas, performance targets, and implementation claims below are superseded or unverified. Read [the current architecture guide](docs/architecture.md), [README.md](README.md), and [SECURITY.md](SECURITY.md) for current behavior.
+
 # FractalMem: Bounding Rate-Distortion and Guaranteeing Prefix-Cache Invariance in Hierarchical Agentic Memory
 **Conference Submission Proposal (Target: ICLR 2026 / ACL 2026 Systems Track)**  
 **Authors:** Hemant Sharma, Platform Architecture Group  

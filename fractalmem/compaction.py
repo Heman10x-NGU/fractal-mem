@@ -6,6 +6,9 @@ import asyncio
 import ipaddress
 import json
 import time
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol, cast
@@ -19,7 +22,7 @@ from fractalmem.core.summary import (
     validate_summary_candidate,
 )
 from fractalmem.security.guard import frame_untrusted
-from fractalmem.security.redact import Redactor
+from fractalmem.security.redact import RedactionError, Redactor
 from fractalmem.security.tool_schema import sanitize_tool_wrapper
 
 SYSTEM_PROMPT = (
@@ -180,6 +183,30 @@ class Usage:
         if self.cache_read_tokens > self.input_tokens:
             return None
         return self.cache_read_tokens / self.input_tokens
+
+
+UsageSink = Callable[[Usage], Awaitable[None]]
+_usage_sink: ContextVar[UsageSink | None] = ContextVar("compaction_usage_sink", default=None)
+
+
+@contextmanager
+def observe_compaction_usage(sink: UsageSink) -> Iterator[None]:
+    """Observe replies within one async job without changing provider/subclass APIs.
+
+    Context-local binding prevents concurrent jobs from sharing an accounting sink.
+    Observed usage is not a complete billing ledger: lost responses remain unknown.
+    """
+    token = _usage_sink.set(sink)
+    try:
+        yield
+    finally:
+        _usage_sink.reset(token)
+
+
+async def _record_observed_usage(usage: Usage) -> None:
+    sink = _usage_sink.get()
+    if sink is not None:
+        await sink(usage)
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,9 +428,15 @@ class HTTPTextProvider:
             raise TransientProviderError("provider transport failed") from error
         except (json.JSONDecodeError, UnicodeError) as error:
             raise ProviderError("provider JSON decoding failed") from error
-        return await asyncio.to_thread(
-            extract_reply, self.config.provider, decoded, (time.perf_counter() - started) * 1000
-        )
+        latency_ms = (time.perf_counter() - started) * 1000
+        try:
+            return await asyncio.to_thread(extract_reply, self.config.provider, decoded, latency_ms)
+        except (ProviderError, RedactionError):
+            # A rejected response can still contain actual billable usage. Successful
+            # replies are observed by Compactor so custom providers work identically.
+            usage = decoded.get("usage") if isinstance(decoded, dict) else None
+            await _record_observed_usage(parse_usage(self.config.provider, usage, latency_ms))
+            raise
 
 
 @dataclass(frozen=True, slots=True)
@@ -449,6 +482,7 @@ class Compactor:
             "no tools. Do not add facts from the chat that the evidence lacks.\n" + framed.text
         )
         facts = await self.provider.complete(view_buffer, fact_task)
+        await _record_observed_usage(facts.usage)
         usage.append(facts.usage)
         # Explicitly scrub custom/first-stage provider facts before nonce framing.
         scrubbed_facts = await asyncio.to_thread(redactor.redact, facts.text)
@@ -464,6 +498,7 @@ class Compactor:
         shortest = ""
         for _ in range(self.max_attempts):
             reply = await self.provider.complete(view_buffer, enforcement)
+            await _record_observed_usage(reply.usage)
             usage.append(reply.usage)
             candidate = sanitize_summary_line(redactor.redact(reply.text))
             if validate_summary_candidate(candidate, budget=512, redactor=redactor):

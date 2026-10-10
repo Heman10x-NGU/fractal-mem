@@ -398,14 +398,11 @@ class View:
 
             # Durably sync directory entry on POSIX systems supporting O_DIRECTORY
             if hasattr(os, "O_DIRECTORY"):
+                dir_fd = os.open(temp_dir, os.O_RDONLY | os.O_DIRECTORY)
                 try:
-                    dir_fd = os.open(temp_dir, os.O_RDONLY | os.O_DIRECTORY)
-                    try:
-                        os.fsync(dir_fd)
-                    finally:
-                        os.close(dir_fd)
-                except OSError:
-                    pass
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
         except Exception as e:
             if temp_path.exists():
                 try:
@@ -430,3 +427,4 @@ class View:
             raise ViewPersistenceError(f"Failed to read view snapshot {target_path}: {e}") from e
 
         return cls.from_dict(data)
+
