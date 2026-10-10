@@ -55,8 +55,9 @@ The ingest receipt reports `accepted`, `durable`, `event_id`, and `reason`.
 `accepted: true` acknowledges an in-memory queue admission, not a database
 commit. The explicit flush waits for earlier admissions to be processed;
 check its `conflicts` and `rejected_invalid` counters as well as `durable`.
-With `--compact`, also check `compacted`: failed jobs prevent successful
-compaction. These counters cover the daemon, not just this project.
+A failed compacting flush exits with an error; run `--operation status` to
+inspect pending/failed jobs. A successful compacting response includes
+`compacted: true`. These counters cover the daemon, not just this project.
 
 A timeout can occur after admission. Retry the exact ingest command above,
 keeping the same event ID, project, session, kind, language, and payload bytes.
