@@ -146,9 +146,9 @@ formatting. Open `Database` with `read_only=True` and inject
 must share your actual tools/system prefix and provider instance for alignment.
 
 Provider cache reuse also depends on model, request, and TTL; stable bytes do
-not guarantee cache hits. Usage from completed compaction jobs is stored in `compaction_runs`;
-failed jobs can omit earlier call usage, so this is not a complete billing ledger.
-Missing cache or time-to-first-token observations remain null.
+not guarantee cache hits. Recorded compactor usage is available in `compaction_runs`. Treat it as
+observations, not a complete billing ledger: missing responses are not evidence
+of zero cost. Missing cache or time-to-first-token observations remain null.
 
 ## Optional model compaction
 
