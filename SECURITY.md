@@ -46,13 +46,30 @@ policy, not a substitute for an OS network firewall.
 
 Hook receipts acknowledge volatile queue admission only. A timeout can occur
 after the event was admitted; retries must reuse the same event identity.
-Queue overflow fails open. `flush` waits for a commit barrier and exposes
+Queue overflow fails open. Admission is bounded by event count and, by default,
+64 MiB of queued UTF-8 payload (`fractald --queue-bytes` overrides this budget).
+The byte budget excludes object overhead, socket buffers, popped writer batches
+and active compaction copies; it is not an overall process-memory limit. `flush` waits for a commit barrier and exposes
 identity conflicts and invalid-event rejections. `flush --compact` additionally
-requires jobs to finish; failed jobs require explicit retry after remediation.
+waits for global compaction quiescence, including publication, without blocking
+new raw-event commits. Continuous ingestion can delay it until timeout. Failed
+jobs require explicit retry after remediation. Timed-out waiters are removed.
 SIGTERM drains admitted raw events, cancels model work and requeues unfinished
 jobs on restart. SQLite WAL with NORMAL protects process-crash consistency;
 FULL offers stronger power-loss durability. Filesystem/fsync errors surface
-as writer failure and stop new admission.
+as writer failure and stop new admission. If an export was replaced before its
+directory fsync failed, the new file may exist but its durability is uncertain.
+Do not delete it as a rollback. Directory fsync requires platform `O_DIRECTORY`
+support.
 
 Report a reproducible security issue privately to the repository owner.
 Use dummy credentials and sanitized examples; never upload live secrets.
+
+## Usage accounting
+
+Observed provider usage is persisted per response before later compaction stages.
+Failed/cancelled jobs retain observations already recorded. Completion records
+avoid counting those observations again. Invalid replies with parseable usage
+are recorded even when their text is rejected. This is not a complete billing
+ledger: lost/unparseable responses, crashes before recording and provider-side
+billing adjustments remain unknown. Reconcile against the provider's invoices.

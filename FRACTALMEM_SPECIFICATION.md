@@ -1,3 +1,5 @@
+> Historical design document. Some formulas, performance targets, and implementation claims below are superseded or unverified. Read [the current architecture guide](docs/architecture.md), [README.md](README.md), and [SECURITY.md](SECURITY.md) for current behavior.
+
 # FractalMem: A Cache-Aligned Hierarchical Memory Engine for Long-Horizon AI Agents
 **Formal Architectural Specification & Technical Whitepaper (v2.1 - Cache-Stable Release)**  
 **Target Release:** Open-Source Foundation & Academic Submission (ICLR / ACL 2026 Systems Track)  
